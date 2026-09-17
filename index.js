@@ -1016,6 +1016,466 @@ client.on(
 );
 
 // ==================================================
+// MANUAL OLD MESSAGE CLEANUP
+// ==================================================
+
+const CLEANUP_COMMAND = "!cleanup";
+
+async function cleanupOldMessages(message) {
+  // Only allow moderators with Manage Messages
+  if (!message.member.permissions.has("ManageMessages")) {
+    await message.reply(
+      "❌ You need the **Manage Messages** permission to use this command."
+    ).catch(() => {});
+
+    return;
+  }
+
+  section("🧹 MANUAL CLEANUP STARTED");
+
+  console.log(
+    `Requested by: ${message.author.tag}`
+  );
+
+  console.log(
+    `Channel: ${message.channel.id}`
+  );
+
+  // Fetch up to 100 recent messages at a time.
+  let lastId = undefined;
+  let totalScanned = 0;
+  let totalDeleted = 0;
+
+  try {
+    while (true) {
+
+      const options = {
+        limit: 100
+      };
+
+      if (lastId) {
+        options.before = lastId;
+      }
+
+      const messages =
+        await message.channel.messages.fetch(
+          options
+        );
+
+      if (messages.size === 0) {
+        break;
+      }
+
+      lastId =
+        messages.last().id;
+
+      for (const oldMessage of messages.values()) {
+
+        // Don't delete Foodie Flex's own messages
+        if (
+          oldMessage.author.id ===
+          client.user.id
+        ) {
+          continue;
+        }
+
+        totalScanned++;
+
+        const content =
+          (oldMessage.content || "")
+            .trim();
+
+        const lowerContent =
+          content.toLowerCase();
+
+        const hasTrigger =
+          lowerContent.includes(
+            TRIGGER
+          );
+
+        const attachments =
+          [...oldMessage.attachments.values()];
+
+        const hasSticker =
+          oldMessage.stickers.size > 0;
+
+        // ------------------------------
+        // AUDIO
+        // ------------------------------
+
+        const audio =
+          attachments.find(
+            (attachment) => {
+
+              const type =
+                attachment.contentType || "";
+
+              const name =
+                (attachment.name || "")
+                  .toLowerCase();
+
+              return (
+                type.startsWith("audio/") ||
+                /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i
+                  .test(name)
+              );
+            }
+          );
+
+        // ------------------------------
+        // IMAGE / GIF
+        // ------------------------------
+
+        const image =
+          attachments.find(
+            (attachment) => {
+
+              const type =
+                attachment.contentType || "";
+
+              const name =
+                (attachment.name || "")
+                  .toLowerCase();
+
+              return (
+                type.startsWith("image/") ||
+                /\.(jpg|jpeg|png|webp|gif)$/i
+                  .test(name)
+              );
+            }
+          );
+
+        // ------------------------------
+        // VIDEO
+        // ------------------------------
+
+        const video =
+          attachments.find(
+            (attachment) => {
+
+              const type =
+                attachment.contentType || "";
+
+              const name =
+                (attachment.name || "")
+                  .toLowerCase();
+
+              return (
+                type.startsWith("video/") ||
+                /\.(mp4|mov|webm|mkv|avi)$/i
+                  .test(name)
+              );
+            }
+          );
+
+        // ------------------------------
+        // TEXT / EMOJI
+        // ------------------------------
+
+        if (
+          !image &&
+          !video &&
+          !audio &&
+          !hasSticker
+        ) {
+
+          try {
+            await oldMessage.delete();
+
+            totalDeleted++;
+
+            console.log(
+              `🗑️ OLD DELETE — TEXT / EMOJI — ${oldMessage.id}`
+            );
+
+          } catch (error) {
+            console.error(
+              `❌ Could not delete ${oldMessage.id}:`,
+              error.message
+            );
+          }
+
+          continue;
+        }
+
+        // ------------------------------
+        // STICKER
+        // ------------------------------
+
+        if (hasSticker) {
+
+          try {
+            await oldMessage.delete();
+
+            totalDeleted++;
+
+            console.log(
+              `🗑️ OLD DELETE — STICKER — ${oldMessage.id}`
+            );
+
+          } catch (error) {
+            console.error(
+              `❌ Could not delete ${oldMessage.id}:`,
+              error.message
+            );
+          }
+
+          continue;
+        }
+
+        // ------------------------------
+        // AUDIO / VOICE
+        // ------------------------------
+
+        if (audio) {
+
+          try {
+            await oldMessage.delete();
+
+            totalDeleted++;
+
+            console.log(
+              `🗑️ OLD DELETE — VOICE / AUDIO — ${oldMessage.id}`
+            );
+
+          } catch (error) {
+            console.error(
+              `❌ Could not delete ${oldMessage.id}:`,
+              error.message
+            );
+          }
+
+          continue;
+        }
+
+        // ------------------------------
+        // MEDIA WITHOUT TRIGGER
+        // ------------------------------
+
+        if (!hasTrigger) {
+
+          const type =
+            video
+              ? "VIDEO"
+              : image
+                ? (
+                    image.contentType ===
+                      "image/gif" ||
+                    (image.name || "")
+                      .toLowerCase()
+                      .endsWith(".gif")
+                      ? "GIF"
+                      : "IMAGE"
+                  )
+                : "UNKNOWN";
+
+          try {
+            await oldMessage.delete();
+
+            totalDeleted++;
+
+            console.log(
+              `🗑️ OLD DELETE — ${type} — TRIGGER MISSING — ${oldMessage.id}`
+            );
+
+          } catch (error) {
+            console.error(
+              `❌ Could not delete ${oldMessage.id}:`,
+              error.message
+            );
+          }
+
+          continue;
+        }
+
+        // ------------------------------
+        // TRIGGER + VIDEO
+        // ------------------------------
+
+        if (video) {
+
+          console.log(
+            `🤖 OLD VIDEO AI CHECK — ${oldMessage.id}`
+          );
+
+          let isFood = false;
+
+          try {
+            isFood =
+              await checkVideo(video);
+          } catch (error) {
+            console.error(
+              `❌ Old video AI check failed:`,
+              error.message
+            );
+          }
+
+          if (!isFood) {
+
+            try {
+              await oldMessage.delete();
+
+              totalDeleted++;
+
+              console.log(
+                `🗑️ OLD DELETE — VIDEO NOT FOOD — ${oldMessage.id}`
+              );
+
+            } catch (error) {
+              console.error(
+                `❌ Could not delete ${oldMessage.id}:`,
+                error.message
+              );
+            }
+
+          } else {
+
+            console.log(
+              `✅ OLD VIDEO ALLOWED — FOOD — ${oldMessage.id}`
+            );
+          }
+
+          continue;
+        }
+
+        // ------------------------------
+        // TRIGGER + IMAGE / GIF
+        // ------------------------------
+
+        if (image) {
+
+          const isGif =
+            image.contentType ===
+              "image/gif" ||
+            (image.name || "")
+              .toLowerCase()
+              .endsWith(".gif");
+
+          console.log(
+            `🤖 OLD ${isGif ? "GIF" : "IMAGE"} AI CHECK — ${oldMessage.id}`
+          );
+
+          let isFood = false;
+
+          try {
+            isFood =
+              await checkImage(image);
+          } catch (error) {
+            console.error(
+              `❌ Old image AI check failed:`,
+              error.message
+            );
+          }
+
+          if (!isFood) {
+
+            try {
+              await oldMessage.delete();
+
+              totalDeleted++;
+
+              console.log(
+                `🗑️ OLD DELETE — ${isGif ? "GIF" : "IMAGE"} NOT FOOD — ${oldMessage.id}`
+              );
+
+            } catch (error) {
+              console.error(
+                `❌ Could not delete ${oldMessage.id}:`,
+                error.message
+              );
+            }
+
+          } else {
+
+            console.log(
+              `✅ OLD ${isGif ? "GIF" : "IMAGE"} ALLOWED — FOOD — ${oldMessage.id}`
+            );
+          }
+
+          continue;
+        }
+      }
+
+      // If fewer than 100 were returned,
+      // there are no more messages to scan.
+      if (messages.size < 100) {
+        break;
+      }
+    }
+
+    section("✅ MANUAL CLEANUP COMPLETE");
+
+    console.log(
+      `Messages scanned: ${totalScanned}`
+    );
+
+    console.log(
+      `Messages deleted: ${totalDeleted}`
+    );
+
+    await message.channel.send(
+      `🧹 **Cleanup complete.**\n` +
+      `Scanned: **${totalScanned}** messages\n` +
+      `Deleted: **${totalDeleted}** messages`
+    );
+
+  } catch (error) {
+
+    console.error(
+      "❌ CLEANUP FAILED:",
+      error
+    );
+
+    await message.channel.send(
+      "❌ Cleanup failed. Check the Render logs."
+    ).catch(() => {});
+  }
+}
+
+// ==================================================
+// CLEANUP COMMAND LISTENER
+// ==================================================
+
+client.on(
+  "messageCreate",
+  async (message) => {
+
+    // Only Foodie Flex's food channel
+    if (
+      message.channel.id !==
+      FOOD_CHANNEL_ID
+    ) {
+      return;
+    }
+
+    // Don't process bot commands
+    if (message.author.bot) {
+      return;
+    }
+
+    const content =
+      (message.content || "")
+        .trim()
+        .toLowerCase();
+
+    if (
+      content !==
+      CLEANUP_COMMAND
+    ) {
+      return;
+    }
+
+    // Delete the command itself
+    await message.delete()
+      .catch(() => {});
+
+    await cleanupOldMessages(
+      message
+    );
+  }
+);
+
+// ==================================================
 // LOGIN
 // ==================================================
 
