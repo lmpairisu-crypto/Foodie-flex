@@ -81,7 +81,6 @@ async function sendFoodReminder() {
       limit: 50
     });
 
-    // Don't create another reminder if one already exists
     const existingReminder = messages.find(
       (msg) =>
         msg.author.id === client.user.id &&
@@ -92,7 +91,10 @@ async function sendFoodReminder() {
     if (existingReminder) {
       if (!existingReminder.pinned) {
         await existingReminder.pin().catch((error) => {
-          console.error("Could not pin existing reminder:", error.message);
+          console.error(
+            "Could not pin existing reminder:",
+            error.message
+          );
         });
       }
 
@@ -141,7 +143,7 @@ async function isFoodImage(imageUrl) {
             {
               type: "input_text",
               text:
-                "Look at this image and determine whether the main subject is clearly food or a food/drink item. Reply with ONLY YES or NO. People, animals, scenery, screenshots, memes, logos, documents, and ordinary objects are NOT food."
+                "Look at this image. Decide whether the main subject is clearly food or a food/drink item. Reply with ONLY YES or NO. People, animals, scenery, screenshots, memes, logos, documents, and ordinary objects are NOT food."
             },
             {
               type: "input_image",
@@ -183,8 +185,7 @@ client.once("ready", async () => {
 
 client.on("messageCreate", async (message) => {
   try {
-
-    // Ignore all other channels
+    // Only moderate the food channel
     if (message.channel.id !== FOOD_CHANNEL_ID) {
       return;
     }
@@ -194,20 +195,14 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // =========================
-    // TRIGGER CHECK
-    // =========================
-
     const trigger = "kain po tayo team ryzza";
 
     const content = message.content
       .toLowerCase()
       .trim();
 
-    const hasTrigger = content.includes(trigger);
-
     // =========================
-    // IMAGE CHECK
+    // FIND IMAGE
     // =========================
 
     const image = message.attachments.find((attachment) => {
@@ -218,7 +213,14 @@ client.on("messageCreate", async (message) => {
     });
 
     // =========================
-    // NO TRIGGER
+    // TRIGGER CHECK
+    // =========================
+
+    const hasTrigger = content.includes(trigger);
+
+    // =========================
+    // RULE 1:
+    // NO TRIGGER = DELETE
     // =========================
 
     if (!hasTrigger) {
@@ -237,12 +239,13 @@ client.on("messageCreate", async (message) => {
     }
 
     // =========================
-    // TRIGGER BUT NO IMAGE
+    // RULE 2:
+    // TRIGGER BUT NO PICTURE = DELETE
     // =========================
 
     if (!image) {
       console.log(
-        `Deleting ${message.author.tag}: trigger found but no picture`
+        `Deleting ${message.author.tag}: no picture`
       );
 
       await message.delete().catch((error) => {
@@ -256,7 +259,9 @@ client.on("messageCreate", async (message) => {
     }
 
     // =========================
-    // AI FOOD CHECK
+    // RULE 3:
+    // TRIGGER + PICTURE
+    // AI CHECK
     // =========================
 
     console.log(
@@ -266,12 +271,12 @@ client.on("messageCreate", async (message) => {
     const food = await isFoodImage(image.url);
 
     // =========================
-    // NOT FOOD
+    // NOT FOOD = DELETE
     // =========================
 
     if (!food) {
       console.log(
-        `Deleting ${message.author.tag}: picture is NOT food`
+        `Deleting ${message.author.tag}: NOT food`
       );
 
       await message.delete().catch((error) => {
@@ -285,14 +290,15 @@ client.on("messageCreate", async (message) => {
     }
 
     // =========================
-    // APPROVED FOOD
+    // FOOD = APPROVED
     // =========================
 
     console.log(
       `Approved food picture from ${message.author.tag}`
     );
 
-    // Delete the original message
+    // Delete original message containing
+    // trigger + picture
     await message.delete().catch((error) => {
       console.error(
         "Could not delete original message:",
@@ -300,7 +306,7 @@ client.on("messageCreate", async (message) => {
       );
     });
 
-    // Repost ONLY the food picture
+    // Repost ONLY the picture
     await message.channel.send({
       files: [image.url]
     });
