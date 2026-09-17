@@ -1,8 +1,10 @@
+
 const express = require("express");
 const OpenAI = require("openai");
 const {
   Client,
-  GatewayIntentBits
+  GatewayIntentBits,
+  EmbedBuilder
 } = require("discord.js");
 
 // ==========================
@@ -64,7 +66,7 @@ const client = new Client({
 });
 
 // ==========================
-// FOOD CHANNEL REMINDER
+// FOODIE REMINDER EMBED
 // ==========================
 
 async function sendFoodReminder() {
@@ -72,20 +74,56 @@ async function sendFoodReminder() {
     const channel = await client.channels.fetch(FOOD_CHANNEL_ID);
 
     if (!channel || !channel.isTextBased()) {
-      console.error("Food channel could not be found.");
+      console.error("Food channel not found.");
       return;
     }
 
-    await channel.send({
-      content:
-        "🍽️ **Foodie Reminder**\n" +
-        "To post your food picture, you need to say **Kain Po Tayo Team Ryzza** together with your picture.\n" +
-        "🤖 The bot will check the picture and only allow food pictures."
+    // Prevent duplicate reminders
+    const messages = await channel.messages.fetch({
+      limit: 50
     });
 
-    console.log("Foodie reminder sent.");
+    const existingReminder = messages.find(
+      (msg) =>
+        msg.author.id === client.user.id &&
+        msg.embeds.length > 0 &&
+        msg.embeds[0].title === "🍽️ Foodie Reminder"
+    );
+
+    if (existingReminder) {
+      console.log("Foodie Reminder already exists.");
+
+      // Make sure it is pinned
+      if (!existingReminder.pinned) {
+        await existingReminder.pin().catch(() => {});
+      }
+
+      return;
+    }
+
+    const reminderEmbed = new EmbedBuilder()
+      .setTitle("🍽️ Foodie Reminder")
+      .setDescription(
+        "\u200B\n" +
+        "**To post your food picture:**\n\n" +
+        "Say **Kain Po Tayo Team Ryzza**\n" +
+        "together with your food picture.\n\n" +
+        "\u200B\n" +
+        "🤖 **The Bot**\n\n" +
+        "will check your picture and only allow food pictures."
+      );
+
+    const reminder = await channel.send({
+      embeds: [reminderEmbed]
+    });
+
+    // Pin the reminder
+    await reminder.pin();
+
+    console.log("Foodie Reminder embed sent and pinned.");
+
   } catch (error) {
-    console.error("Could not send food reminder:", error);
+    console.error("Reminder error:", error);
   }
 }
 
@@ -115,7 +153,7 @@ async function isFoodImage(imageUrl) {
             {
               type: "input_text",
               text:
-                "Look at this image. Is the main subject clearly food or a food/drink item? Reply with ONLY YES or NO. Do not consider text, logos, memes, people, animals, scenery, or ordinary objects to be food."
+                "Look at this image. Is the main subject clearly food or a food/drink item? Reply with ONLY YES or NO. People, animals, scenery, memes, screenshots, logos, and ordinary objects are NOT food."
             },
             {
               type: "input_image",
@@ -131,11 +169,12 @@ async function isFoodImage(imageUrl) {
     console.log(`AI food check: ${result}`);
 
     return result === "YES";
+
   } catch (error) {
     console.error("AI food check failed:", error);
 
-    // If the AI check fails,
-    // do not allow the picture.
+    // If AI cannot check the picture,
+    // reject it.
     return false;
   }
 }
@@ -146,19 +185,25 @@ async function isFoodImage(imageUrl) {
 
 client.on("messageCreate", async (message) => {
   try {
-    // Ignore bot messages
-    if (message.author.bot) return;
-
     // Only moderate the food channel
     if (message.channel.id !== FOOD_CHANNEL_ID) return;
 
-    // Required trigger phrase
+    // Never delete bot messages
+    if (message.author.bot) return;
+
+    // ==========================
+    // REQUIRED TRIGGER
+    // ==========================
+
     const trigger = "kain po tayo team ryzza";
 
     // Emojis are allowed.
     const content = message.content.toLowerCase();
 
-    // Find image attachment
+    // ==========================
+    // FIND IMAGE
+    // ==========================
+
     const image = message.attachments.find((attachment) => {
       return attachment.contentType?.startsWith("image/");
     });
@@ -168,7 +213,9 @@ client.on("messageCreate", async (message) => {
     // ==========================
 
     if (!content.includes(trigger)) {
-      await message.delete().catch(() => {});
+      await message.delete().catch((error) => {
+        console.error("Could not delete message:", error);
+      });
 
       console.log(
         `Deleted ${message.author.tag}: missing trigger`
@@ -182,10 +229,12 @@ client.on("messageCreate", async (message) => {
     // ==========================
 
     if (!image) {
-      await message.delete().catch(() => {});
+      await message.delete().catch((error) => {
+        console.error("Could not delete message:", error);
+      });
 
       console.log(
-        `Deleted ${message.author.tag}: no picture`
+        `Deleted ${message.author.tag}: trigger without picture`
       );
 
       return;
@@ -202,10 +251,12 @@ client.on("messageCreate", async (message) => {
     // ==========================
 
     if (!food) {
-      await message.delete().catch(() => {});
+      await message.delete().catch((error) => {
+        console.error("Could not delete message:", error);
+      });
 
       console.log(
-        `Deleted ${message.author.tag}: not food`
+        `Deleted ${message.author.tag}: picture is not food`
       );
 
       return;
@@ -215,10 +266,10 @@ client.on("messageCreate", async (message) => {
     // APPROVED FOOD
     // ==========================
 
-    // Delete original message
+    // Delete the original message
     await message.delete().catch(() => {});
 
-    // Post ONLY the picture
+    // Post ONLY the food picture
     await message.channel.send({
       files: [image.url]
     });
@@ -228,7 +279,7 @@ client.on("messageCreate", async (message) => {
     );
 
   } catch (error) {
-    console.error("Food bot error:", error);
+    console.error("Message handler error:", error);
   }
 });
 
