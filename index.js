@@ -6,9 +6,9 @@ const {
   EmbedBuilder
 } = require("discord.js");
 
-// ==========================
-// RENDER HEALTH CHECK
-// ==========================
+// =========================
+// HEALTH SERVER
+// =========================
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -21,9 +21,9 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Health server running on port ${PORT}`);
 });
 
-// ==========================
-// ENVIRONMENT VARIABLES
-// ==========================
+// =========================
+// RENDER VARIABLES
+// =========================
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const FOOD_CHANNEL_ID = process.env.FOOD_CHANNEL_ID;
@@ -44,17 +44,17 @@ if (!OPENAI_API_KEY) {
   process.exit(1);
 }
 
-// ==========================
+// =========================
 // OPENAI
-// ==========================
+// =========================
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY
 });
 
-// ==========================
+// =========================
 // DISCORD CLIENT
-// ==========================
+// =========================
 
 const client = new Client({
   intents: [
@@ -64,9 +64,9 @@ const client = new Client({
   ]
 });
 
-// ==========================
+// =========================
 // FOODIE REMINDER
-// ==========================
+// =========================
 
 async function sendFoodReminder() {
   try {
@@ -81,6 +81,7 @@ async function sendFoodReminder() {
       limit: 50
     });
 
+    // Don't create another reminder if one already exists
     const existingReminder = messages.find(
       (msg) =>
         msg.author.id === client.user.id &&
@@ -90,7 +91,9 @@ async function sendFoodReminder() {
 
     if (existingReminder) {
       if (!existingReminder.pinned) {
-        await existingReminder.pin().catch(() => {});
+        await existingReminder.pin().catch((error) => {
+          console.error("Could not pin existing reminder:", error.message);
+        });
       }
 
       console.log("Foodie Reminder already exists.");
@@ -122,25 +125,15 @@ async function sendFoodReminder() {
   }
 }
 
-// ==========================
-// BOT READY
-// ==========================
-
-client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  console.log(`Food channel: ${FOOD_CHANNEL_ID}`);
-
-  await sendFoodReminder();
-});
-
-// ==========================
+// =========================
 // AI FOOD CHECK
-// ==========================
+// =========================
 
 async function isFoodImage(imageUrl) {
   try {
     const response = await openai.responses.create({
       model: "gpt-5.6-luna",
+
       input: [
         {
           role: "user",
@@ -148,7 +141,7 @@ async function isFoodImage(imageUrl) {
             {
               type: "input_text",
               text:
-                "Is the main subject of this image clearly food or a drink? Reply with ONLY YES or NO. Do not count people, animals, scenery, screenshots, memes, text, logos, toys, or ordinary objects as food."
+                "Look at this image and determine whether the main subject is clearly food or a food/drink item. Reply with ONLY YES or NO. People, animals, scenery, screenshots, memes, logos, documents, and ordinary objects are NOT food."
             },
             {
               type: "input_image",
@@ -169,40 +162,54 @@ async function isFoodImage(imageUrl) {
 
   } catch (error) {
     console.error("AI food check failed:", error);
-
-    // Reject if AI cannot check it.
     return false;
   }
 }
 
-// ==========================
-// STRICT FOOD CHANNEL
-// ==========================
+// =========================
+// BOT READY
+// =========================
+
+client.once("ready", async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Food channel: ${FOOD_CHANNEL_ID}`);
+
+  await sendFoodReminder();
+});
+
+// =========================
+// MESSAGE HANDLER
+// =========================
 
 client.on("messageCreate", async (message) => {
   try {
 
-    // Ignore channels other than the food channel
+    // Ignore all other channels
     if (message.channel.id !== FOOD_CHANNEL_ID) {
       return;
     }
 
-    // IMPORTANT:
-    // Never delete messages sent by this bot.
+    // Never delete bot messages
     if (message.author.bot) {
       return;
     }
 
-    // Required phrase
+    // =========================
+    // TRIGGER CHECK
+    // =========================
+
     const trigger = "kain po tayo team ryzza";
 
-    // Convert text to lowercase
-    // so capitalization does not matter.
     const content = message.content
       .toLowerCase()
       .trim();
 
-    // Find an attached image
+    const hasTrigger = content.includes(trigger);
+
+    // =========================
+    // IMAGE CHECK
+    // =========================
+
     const image = message.attachments.find((attachment) => {
       return (
         attachment.contentType &&
@@ -210,15 +217,13 @@ client.on("messageCreate", async (message) => {
       );
     });
 
-    // ==========================
-    // STRICT CHECK #1
-    // NO TRIGGER = DELETE
-    // ==========================
+    // =========================
+    // NO TRIGGER
+    // =========================
 
-    if (!content.includes(trigger)) {
-
+    if (!hasTrigger) {
       console.log(
-        `Deleting message from ${message.author.tag}: trigger missing`
+        `Deleting ${message.author.tag}: trigger missing`
       );
 
       await message.delete().catch((error) => {
@@ -231,15 +236,13 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // ==========================
-    // STRICT CHECK #2
+    // =========================
     // TRIGGER BUT NO IMAGE
-    // ==========================
+    // =========================
 
     if (!image) {
-
       console.log(
-        `Deleting message from ${message.author.tag}: no picture`
+        `Deleting ${message.author.tag}: trigger found but no picture`
       );
 
       await message.delete().catch((error) => {
@@ -252,9 +255,9 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // ==========================
-    // AI CHECK
-    // ==========================
+    // =========================
+    // AI FOOD CHECK
+    // =========================
 
     console.log(
       `Checking picture from ${message.author.tag}...`
@@ -262,12 +265,11 @@ client.on("messageCreate", async (message) => {
 
     const food = await isFoodImage(image.url);
 
-    // ==========================
-    // NOT FOOD = DELETE
-    // ==========================
+    // =========================
+    // NOT FOOD
+    // =========================
 
     if (!food) {
-
       console.log(
         `Deleting ${message.author.tag}: picture is NOT food`
       );
@@ -282,21 +284,23 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // ==========================
-    // VALID FOOD
-    // ==========================
+    // =========================
+    // APPROVED FOOD
+    // =========================
 
     console.log(
       `Approved food picture from ${message.author.tag}`
     );
 
-    // Delete original message containing
-    // the trigger + picture.
+    // Delete the original message
     await message.delete().catch((error) => {
-      console.error("Could not delete original:", error.message);
+      console.error(
+        "Could not delete original message:",
+        error.message
+      );
     });
 
-    // Post ONLY the picture.
+    // Repost ONLY the food picture
     await message.channel.send({
       files: [image.url]
     });
@@ -306,8 +310,8 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ==========================
+// =========================
 // LOGIN
-// ==========================
+// =========================
 
 client.login(DISCORD_TOKEN);
