@@ -1,5 +1,11 @@
 const express = require("express");
 const OpenAI = require("openai");
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { execFile } = require("child_process");
+const ffmpegPath = require("ffmpeg-static");
+
 const {
   Client,
   GatewayIntentBits,
@@ -63,47 +69,243 @@ const client = new Client({
 const TRIGGER = "kain po tayo team ryzza";
 
 // ==================================================
-// DELETE FUNCTION
+// DELETE MESSAGE
 // ==================================================
 
 async function deleteMessage(message, reason) {
-  console.log(
-    `Deleting ${message.author.tag}: ${reason}`
-  );
+  console.log("========================================");
+  console.log("DELETE ACTION");
+  console.log(`Message ID: ${message.id}`);
+  console.log(`Author: ${message.author.tag}`);
+  console.log(`Author ID: ${message.author.id}`);
+  console.log(`Webhook ID: ${message.webhookId || "NONE"}`);
+  console.log(`Message Type: ${message.type}`);
+  console.log(`Reason: ${reason}`);
+  console.log("========================================");
 
   try {
     await message.delete();
-    console.log("Message deleted successfully.");
+
+    console.log(
+      `Message ${message.id} deleted successfully.`
+    );
+
   } catch (error) {
     console.error(
-      "MESSAGE DELETE FAILED:",
+      `MESSAGE DELETE FAILED (${message.id}):`,
       error.message
     );
   }
 }
 
 // ==================================================
-// FOOD AI CHECK
+// DOWNLOAD FILE
 // ==================================================
 
-async function isFoodImage(imageUrl) {
+async function downloadFile(url, outputPath) {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(
+      `Download failed: ${response.status} ${response.statusText}`
+    );
+  }
+
+  const buffer = Buffer.from(
+    await response.arrayBuffer()
+  );
+
+  fs.writeFileSync(outputPath, buffer);
+
+  return outputPath;
+}
+
+// ==================================================
+// RUN FFMPEG
+// ==================================================
+
+function runFFmpeg(args) {
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath,
+      args,
+      {
+        windowsHide: true
+      },
+      (error, stdout, stderr) => {
+        if (error) {
+          console.error("FFmpeg error:", stderr);
+          reject(error);
+          return;
+        }
+
+        resolve({
+          stdout,
+          stderr
+        });
+      }
+    );
+  });
+}
+
+// ==================================================
+// EXTRACT FRAMES FROM VIDEO/GIF
+// ==================================================
+
+async function extractFrames(mediaUrl, extension) {
+  const tempDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "foodie-flex-")
+  );
+
+  const inputPath = path.join(
+    tempDir,
+    `input.${extension}`
+  );
+
+  await downloadFile(
+    mediaUrl,
+    inputPath
+  );
+
+  const outputPattern = path.join(
+    tempDir,
+    "frame-%02d.jpg"
+  );
+
   try {
+    // Extract up to 4 frames spread through the media.
+    // For short videos/GIFs, FFmpeg will simply produce
+    // however many frames are available.
+
+    await runFFmpeg([
+      "-y",
+      "-i",
+      inputPath,
+      "-vf",
+      "fps=1/2,scale=768:-2",
+      "-frames:v",
+      "4",
+      "-q:v",
+      "5",
+      outputPattern
+    ]);
+
+    let files = fs
+      .readdirSync(tempDir)
+      .filter((file) =>
+        /^frame-\d+\.jpg$/i.test(file)
+      )
+      .sort();
+
+    // If the media was very short, try to get at least
+    // one frame.
+    if (files.length === 0) {
+      const singleFrame = path.join(
+        tempDir,
+        "single.jpg"
+      );
+
+      await runFFmpeg([
+        "-y",
+        "-i",
+        inputPath,
+        "-frames:v",
+        "1",
+        "-q:v",
+        "5",
+        singleFrame
+      ]);
+
+      if (fs.existsSync(singleFrame)) {
+        files = ["single.jpg"];
+      }
+    }
+
+    const framePaths = files.map(
+      (file) => path.join(tempDir, file)
+    );
+
+    return {
+      tempDir,
+      inputPath,
+      framePaths
+    };
+
+  } catch (error) {
+    cleanupDirectory(tempDir);
+    throw error;
+  }
+}
+
+// ==================================================
+// CLEAN TEMP DIRECTORY
+// ==================================================
+
+function cleanupDirectory(directory) {
+  try {
+    if (fs.existsSync(directory)) {
+      fs.rmSync(directory, {
+        recursive: true,
+        force: true
+      });
+    }
+  } catch (error) {
+    console.error(
+      "Temporary file cleanup failed:",
+      error.message
+    );
+  }
+}
+
+// ==================================================
+// CONVERT IMAGE TO DATA URL
+// ==================================================
+
+function fileToDataUrl(filePath) {
+  const buffer = fs.readFileSync(filePath);
+
+  return `data:image/jpeg;base64,${buffer.toString(
+    "base64"
+  )}`;
+}
+
+// ==================================================
+// AI CHECK MULTIPLE FRAMES
+// ==================================================
+
+async function isFoodFrames(framePaths) {
+  if (!framePaths || framePaths.length === 0) {
+    console.log("No frames available for AI check.");
+    return false;
+  }
+
+  try {
+    const content = [
+      {
+        type: "input_text",
+        text:
+          "Check these frames from one Discord media post. " +
+          "Reply ONLY YES if the media clearly shows food or a food/drink item " +
+          "as a main subject in at least one frame. " +
+          "Reply ONLY NO if it does not clearly show food. " +
+          "People, animals, scenery, screenshots, memes, logos, documents, " +
+          "ordinary objects, and unrelated content are NOT food."
+      }
+    ];
+
+    for (const framePath of framePaths) {
+      content.push({
+        type: "input_image",
+        image_url: fileToDataUrl(framePath)
+      });
+    }
+
     const response = await openai.responses.create({
       model: "gpt-5.6-luna",
       input: [
         {
           role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "Is the main subject of this image clearly food or a food/drink item? Reply ONLY YES or NO. People, animals, scenery, screenshots, memes, logos, documents, and ordinary objects are NOT food."
-            },
-            {
-              type: "input_image",
-              image_url: imageUrl
-            }
-          ]
+          content
         }
       ]
     });
@@ -112,17 +314,122 @@ async function isFoodImage(imageUrl) {
       .trim()
       .toUpperCase();
 
-    console.log(`AI RESULT: ${result}`);
+    console.log(
+      `AI RESULT: ${result}`
+    );
 
     return result === "YES";
 
   } catch (error) {
     console.error(
-      "AI CHECK FAILED:",
+      "AI FOOD CHECK FAILED:",
       error.message
     );
 
     return false;
+  }
+}
+
+// ==================================================
+// CHECK IMAGE / GIF
+// ==================================================
+
+async function checkImageOrGif(attachment) {
+  const url = attachment.url;
+
+  const name = (
+    attachment.name || ""
+  ).toLowerCase();
+
+  const isGif =
+    attachment.contentType === "image/gif" ||
+    name.endsWith(".gif") ||
+    url.toLowerCase().includes(".gif");
+
+  const extension = isGif
+    ? "gif"
+    : "image";
+
+  let actualExtension = extension;
+
+  if (!isGif) {
+    const match = name.match(
+      /\.(jpg|jpeg|png|webp)$/i
+    );
+
+    if (match) {
+      actualExtension = match[1].toLowerCase();
+    } else {
+      actualExtension = "jpg";
+    }
+  }
+
+  console.log(
+    `Checking ${isGif ? "GIF" : "IMAGE"} for food...`
+  );
+
+  const extracted = await extractFrames(
+    url,
+    actualExtension
+  );
+
+  try {
+    const result = await isFoodFrames(
+      extracted.framePaths
+    );
+
+    return result;
+
+  } finally {
+    cleanupDirectory(
+      extracted.tempDir
+    );
+  }
+}
+
+// ==================================================
+// CHECK VIDEO
+// ==================================================
+
+async function checkVideo(attachment) {
+  console.log(
+    "Checking VIDEO frames for food..."
+  );
+
+  const name = (
+    attachment.name || ""
+  ).toLowerCase();
+
+  let extension = "mp4";
+
+  const match = name.match(
+    /\.(mp4|mov|webm|mkv|avi)$/i
+  );
+
+  if (match) {
+    extension = match[1].toLowerCase();
+  }
+
+  const extracted = await extractFrames(
+    attachment.url,
+    extension
+  );
+
+  try {
+    console.log(
+      `Extracted ${extracted.framePaths.length} video frame(s).`
+    );
+
+    const result = await isFoodFrames(
+      extracted.framePaths
+    );
+
+    return result;
+
+  } finally {
+    cleanupDirectory(
+      extracted.tempDir
+    );
   }
 }
 
@@ -137,7 +444,9 @@ async function sendFoodReminder() {
     );
 
     if (!channel || !channel.isTextBased()) {
-      console.error("Food channel not found.");
+      console.error(
+        "Food channel not found."
+      );
       return;
     }
 
@@ -149,15 +458,21 @@ async function sendFoodReminder() {
       (msg) =>
         msg.author.id === client.user.id &&
         msg.embeds.length > 0 &&
-        msg.embeds[0].title === "🍽️ Foodie Reminder"
+        msg.embeds[0].title ===
+          "🍽️ Foodie Reminder"
     );
 
     if (existingReminder) {
       if (!existingReminder.pinned) {
-        await existingReminder.pin().catch(() => {});
+        await existingReminder
+          .pin()
+          .catch(() => {});
       }
 
-      console.log("Foodie Reminder already exists.");
+      console.log(
+        "Foodie Reminder already exists."
+      );
+
       return;
     }
 
@@ -179,7 +494,9 @@ async function sendFoodReminder() {
 
     await reminder.pin();
 
-    console.log("Foodie Reminder sent and pinned.");
+    console.log(
+      `Foodie Reminder sent and pinned. Message ID: ${reminder.id}`
+    );
 
   } catch (error) {
     console.error(
@@ -194,8 +511,17 @@ async function sendFoodReminder() {
 // ==================================================
 
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  console.log(`Watching food channel: ${FOOD_CHANNEL_ID}`);
+  console.log("========================================");
+  console.log(
+    `Logged in as: ${client.user.tag}`
+  );
+  console.log(
+    `Bot ID: ${client.user.id}`
+  );
+  console.log(
+    `Watching food channel: ${FOOD_CHANNEL_ID}`
+  );
+  console.log("========================================");
 
   await sendFoodReminder();
 });
@@ -204,136 +530,482 @@ client.once("ready", async () => {
 // MESSAGE HANDLER
 // ==================================================
 
-client.on("messageCreate", async (message) => {
+client.on(
+  "messageCreate",
+  async (message) => {
 
-  // VERY IMPORTANT:
-  // Log EVERY message received by the bot.
-  console.log(
-    `[MESSAGE RECEIVED] Channel=${message.channel.id} User=${message.author.tag}`
-  );
+    // ==================================================
+    // DETAILED MESSAGE LOG
+    // ==================================================
 
-  try {
-
-    // Ignore messages outside food channel
-    if (message.channel.id !== FOOD_CHANNEL_ID) {
-      console.log("Ignored: different channel.");
-      return;
-    }
-
-    // Never process bot messages
-    if (message.author.bot) {
-      console.log("Ignored: bot message.");
-      return;
-    }
-
-    const content = message.content
-      .toLowerCase()
-      .trim();
-
-    const hasTrigger = content.includes(TRIGGER);
-
-    const attachments = [
-      ...message.attachments.values()
-    ];
-
-    const image = attachments.find(
-      (attachment) =>
-        attachment.contentType &&
-        attachment.contentType.startsWith("image/")
-    );
-
-    const video = attachments.find(
-      (attachment) =>
-        attachment.contentType &&
-        attachment.contentType.startsWith("video/")
-    );
-
-    const hasSticker =
-      message.stickers &&
-      message.stickers.size > 0;
-
+    console.log("========================================");
+    console.log("[MESSAGE RECEIVED]");
     console.log(
-      `[CHECK] trigger=${hasTrigger} image=${!!image} video=${!!video} sticker=${hasSticker}`
+      `Message ID: ${message.id}`
     );
+    console.log(
+      `Channel ID: ${message.channel.id}`
+    );
+    console.log(
+      `Author: ${message.author.tag}`
+    );
+    console.log(
+      `Author ID: ${message.author.id}`
+    );
+    console.log(
+      `Webhook ID: ${message.webhookId || "NONE"}`
+    );
+    console.log(
+      `Message Type: ${message.type}`
+    );
+    console.log(
+      `Bot Author: ${message.author.bot}`
+    );
+    console.log(
+      `Content: ${message.content || "[NO TEXT]"}`
+    );
+    console.log(
+      `Attachments: ${message.attachments.size}`
+    );
+    console.log(
+      `Stickers: ${message.stickers.size}`
+    );
+    console.log("========================================");
 
-    // ==================================================
-    // NO TRIGGER = DELETE EVERYTHING
-    // ==================================================
+    try {
 
-    if (!hasTrigger) {
+      // ==================================================
+      // ONLY FOOD CHANNEL
+      // ==================================================
+
+      if (
+        message.channel.id !==
+        FOOD_CHANNEL_ID
+      ) {
+        console.log(
+          `Ignored: different channel (${message.channel.id}).`
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // IGNORE FOODIE FLEX'S OWN MESSAGES
+      // ==================================================
+
+      if (
+        message.author.id ===
+        client.user.id
+      ) {
+        console.log(
+          "Ignored: Foodie Flex's own message."
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // DELETE OTHER BOT MESSAGES
+      // ==================================================
+
+      if (message.author.bot) {
+        await deleteMessage(
+          message,
+          "bot message not allowed"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // CONTENT
+      // ==================================================
+
+      const content = (
+        message.content || ""
+      )
+        .toLowerCase()
+        .trim();
+
+      const hasTrigger =
+        content.includes(TRIGGER);
+
+      // ==================================================
+      // ATTACHMENTS
+      // ==================================================
+
+      const attachments = [
+        ...message.attachments.values()
+      ];
+
+      // ==================================================
+      // IMAGE / GIF
+      // ==================================================
+
+      const image = attachments.find(
+        (attachment) => {
+
+          const type =
+            attachment.contentType || "";
+
+          const name =
+            attachment.name || "";
+
+          const url =
+            attachment.url || "";
+
+          return (
+            type.startsWith("image/") ||
+            /\.(jpg|jpeg|png|webp|gif)$/i.test(
+              name
+            ) ||
+            /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(
+              url
+            )
+          );
+        }
+      );
+
+      // ==================================================
+      // VIDEO
+      // ==================================================
+
+      const video = attachments.find(
+        (attachment) => {
+
+          const type =
+            attachment.contentType || "";
+
+          const name =
+            attachment.name || "";
+
+          const url =
+            attachment.url || "";
+
+          return (
+            type.startsWith("video/") ||
+            /\.(mp4|mov|webm|mkv|avi)$/i.test(
+              name
+            ) ||
+            /\.(mp4|mov|webm|mkv|avi)(\?|$)/i.test(
+              url
+            )
+          );
+        }
+      );
+
+      // ==================================================
+      // AUDIO / VOICE
+      // ==================================================
+
+      const audio = attachments.find(
+        (attachment) => {
+
+          const type =
+            attachment.contentType || "";
+
+          const name =
+            attachment.name || "";
+
+          return (
+            type.startsWith("audio/") ||
+            /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(
+              name
+            )
+          );
+        }
+      );
+
+      // ==================================================
+      // STICKER / SERVER STICKER
+      // ==================================================
+
+      const hasSticker =
+        message.stickers &&
+        message.stickers.size > 0;
+
+      // ==================================================
+      // LOG CONTENT CHECK
+      // ==================================================
+
+      console.log("========================================");
+      console.log("[CONTENT CHECK]");
+      console.log(
+        `Message ID: ${message.id}`
+      );
+      console.log(
+        `Trigger: ${hasTrigger}`
+      );
+      console.log(
+        `Image/GIF: ${!!image}`
+      );
+      console.log(
+        `Video: ${!!video}`
+      );
+      console.log(
+        `Audio/Voice: ${!!audio}`
+      );
+      console.log(
+        `Sticker: ${hasSticker}`
+      );
+      console.log("========================================");
+
+      // ==================================================
+      // NO TRIGGER = DELETE
+      // ==================================================
+
+      if (!hasTrigger) {
+
+        await deleteMessage(
+          message,
+          "trigger missing"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // AUDIO / VOICE = DELETE
+      // ==================================================
+
+      if (audio) {
+
+        await deleteMessage(
+          message,
+          "voice/audio not allowed"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // STICKER = DELETE
+      // ==================================================
+
+      if (hasSticker) {
+
+        await deleteMessage(
+          message,
+          "sticker/server sticker not allowed"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // TRIGGER WITHOUT MEDIA = DELETE
+      // ==================================================
+
+      if (!image && !video) {
+
+        await deleteMessage(
+          message,
+          "trigger found but no image or video"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // VIDEO CHECK
+      // ==================================================
+
+      if (video) {
+
+        console.log(
+          `Checking food video from ${message.author.tag}...`
+        );
+
+        let foodVideo = false;
+
+        try {
+          foodVideo = await checkVideo(
+            video
+          );
+
+        } catch (error) {
+
+          console.error(
+            "VIDEO FOOD CHECK FAILED:",
+            error.message
+          );
+
+          foodVideo = false;
+        }
+
+        if (!foodVideo) {
+
+          await deleteMessage(
+            message,
+            "video is not food"
+          );
+
+          return;
+        }
+
+        // ==================================================
+        // FOOD VIDEO APPROVED
+        // ==================================================
+
+        const originalMessageId =
+          message.id;
+
+        try {
+
+          await message.delete();
+
+          console.log(
+            `Original food video ${originalMessageId} deleted successfully.`
+          );
+
+        } catch (error) {
+
+          console.error(
+            "Original video delete failed:",
+            error.message
+          );
+
+          return;
+        }
+
+        const reposted =
+          await message.channel.send({
+            content:
+              "Kain Po Tayo Team Ryzza 🍽️",
+            files: [video.url]
+          });
+
+        console.log(
+          "========================================"
+        );
+        console.log(
+          "FOOD VIDEO APPROVED"
+        );
+        console.log(
+          `Original Message ID: ${originalMessageId}`
+        );
+        console.log(
+          `New Message ID: ${reposted.id}`
+        );
+        console.log(
+          "========================================"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // IMAGE / GIF CHECK
+      // ==================================================
+
+      if (image) {
+
+        console.log(
+          `Checking food image/GIF from ${message.author.tag}...`
+        );
+
+        let foodImage = false;
+
+        try {
+
+          foodImage =
+            await checkImageOrGif(
+              image
+            );
+
+        } catch (error) {
+
+          console.error(
+            "IMAGE/GIF FOOD CHECK FAILED:",
+            error.message
+          );
+
+          foodImage = false;
+        }
+
+        // ==================================================
+        // NOT FOOD = DELETE
+        // ==================================================
+
+        if (!foodImage) {
+
+          await deleteMessage(
+            message,
+            "image/GIF is not food"
+          );
+
+          return;
+        }
+
+        // ==================================================
+        // FOOD IMAGE/GIF APPROVED
+        // ==================================================
+
+        const originalMessageId =
+          message.id;
+
+        try {
+
+          await message.delete();
+
+          console.log(
+            `Original food image ${originalMessageId} deleted successfully.`
+          );
+
+        } catch (error) {
+
+          console.error(
+            "Original image delete failed:",
+            error.message
+          );
+
+          return;
+        }
+
+        const reposted =
+          await message.channel.send({
+            content:
+              "Kain Po Tayo Team Ryzza 🍽️",
+            files: [image.url]
+          });
+
+        console.log(
+          "========================================"
+        );
+        console.log(
+          "FOOD IMAGE/GIF APPROVED"
+        );
+        console.log(
+          `Original Message ID: ${originalMessageId}`
+        );
+        console.log(
+          `New Message ID: ${reposted.id}`
+        );
+        console.log(
+          "========================================"
+        );
+
+        return;
+      }
+
+      // ==================================================
+      // FALLBACK
+      // ==================================================
+
       await deleteMessage(
         message,
-        "trigger missing"
+        "unsupported content"
       );
-      return;
-    }
 
-    // ==================================================
-    // TRIGGER WITHOUT IMAGE = DELETE
-    // ==================================================
+    } catch (error) {
 
-    if (!image) {
-      await deleteMessage(
-        message,
-        "trigger found but no image"
-      );
-      return;
-    }
-
-    // ==================================================
-    // TRIGGER + IMAGE = AI CHECK
-    // ==================================================
-
-    console.log(
-      `Checking food picture from ${message.author.tag}...`
-    );
-
-    const food = await isFoodImage(
-      image.url
-    );
-
-    // ==================================================
-    // NOT FOOD = DELETE
-    // ==================================================
-
-    if (!food) {
-      await deleteMessage(
-        message,
-        "image is not food"
-      );
-      return;
-    }
-
-    // ==================================================
-    // FOOD = DELETE ORIGINAL + REPOST IMAGE
-    // ==================================================
-
-    console.log(
-      `Food approved from ${message.author.tag}`
-    );
-
-    await message.delete().catch((error) => {
       console.error(
-        "Original message delete failed:",
-        error.message
+        "MESSAGE HANDLER ERROR:",
+        error
       );
-    });
-
-    await message.channel.send({
-      files: [image.url]
-    });
-
-    console.log(
-      "Approved food image reposted."
-    );
-
-  } catch (error) {
-    console.error(
-      "MESSAGE HANDLER ERROR:",
-      error
-    );
+    }
   }
-});
+);
 
 // ==================================================
 // LOGIN
