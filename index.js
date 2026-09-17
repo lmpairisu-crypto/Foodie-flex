@@ -32,16 +32,15 @@ app.listen(PORT, "0.0.0.0", () => {
 // ==================================================
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
-const FOOD_CHANNEL_ID = process.env.FOOD_CHANNEL_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// FOOD CHANNEL ID IS BUILT DIRECTLY INTO THE CODE
+const FOOD_CHANNEL_ID = "1550189625954402314";
+
+const TRIGGER = "kain po tayo team ryzza";
 
 if (!DISCORD_TOKEN) {
   console.error("❌ DISCORD_TOKEN is missing!");
-  process.exit(1);
-}
-
-if (!FOOD_CHANNEL_ID) {
-  console.error("❌ FOOD_CHANNEL_ID is missing!");
   process.exit(1);
 }
 
@@ -66,146 +65,68 @@ const client = new Client({
   ]
 });
 
-const TRIGGER = "kain po tayo team ryzza";
-
 // ==================================================
 // LOG HELPERS
 // ==================================================
 
-function printSection(title) {
+function section(title) {
   console.log("");
   console.log("========================================");
   console.log(title);
   console.log("========================================");
 }
 
-function getMessageContent(message) {
-  if (message.content && message.content.trim()) {
-    return message.content;
-  }
-
-  return "[NO TEXT]";
+function messageText(message) {
+  return message.content && message.content.trim()
+    ? message.content
+    : "[NO TEXT]";
 }
 
-function getAttachmentNames(message) {
-  const attachments = [...message.attachments.values()];
+function attachmentNames(message) {
+  const files = [...message.attachments.values()];
 
-  if (attachments.length === 0) {
+  if (!files.length) {
     return "NONE";
   }
 
-  return attachments
-    .map((attachment) => {
-      return attachment.name || attachment.contentType || "UNKNOWN";
-    })
+  return files
+    .map((file) =>
+      file.name || file.contentType || "UNKNOWN"
+    )
     .join(", ");
 }
 
-function getContentType(message) {
-  const content = (message.content || "").trim();
-
-  const attachments = [...message.attachments.values()];
-
-  const hasSticker =
-    message.stickers &&
-    message.stickers.size > 0;
-
-  const hasImage = attachments.some((attachment) => {
-    const type = attachment.contentType || "";
-    const name = (attachment.name || "").toLowerCase();
-
-    return (
-      type.startsWith("image/") ||
-      /\.(jpg|jpeg|png|webp|gif)$/i.test(name)
-    );
-  });
-
-  const hasVideo = attachments.some((attachment) => {
-    const type = attachment.contentType || "";
-    const name = (attachment.name || "").toLowerCase();
-
-    return (
-      type.startsWith("video/") ||
-      /\.(mp4|mov|webm|mkv|avi)$/i.test(name)
-    );
-  });
-
-  const hasAudio = attachments.some((attachment) => {
-    const type = attachment.contentType || "";
-    const name = (attachment.name || "").toLowerCase();
-
-    return (
-      type.startsWith("audio/") ||
-      /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(name)
-    );
-  });
-
-  if (hasSticker) {
-    return "STICKER";
-  }
-
-  if (hasAudio) {
-    return "VOICE / AUDIO";
-  }
-
-  if (hasVideo) {
-    return "VIDEO";
-  }
-
-  if (hasImage) {
-    const isGif = attachments.some((attachment) => {
-      const type = attachment.contentType || "";
-      const name = (attachment.name || "").toLowerCase();
-
-      return (
-        type === "image/gif" ||
-        name.endsWith(".gif")
-      );
-    });
-
-    return isGif ? "GIF" : "IMAGE";
-  }
-
-  if (content) {
-    return "TEXT / EMOJI";
-  }
-
-  return "EMPTY";
-}
-
-function logDeletion(message, type, reason) {
-  printSection("🗑️ MESSAGE DELETED");
+function deleteLog(message, type, reason) {
+  section("🗑️ MESSAGE DELETED");
 
   console.log(`Author: ${message.author.tag}`);
   console.log(`Author ID: ${message.author.id}`);
   console.log(`Message ID: ${message.id}`);
   console.log(`Channel ID: ${message.channel.id}`);
   console.log(`Type: ${type}`);
-  console.log(`Content: ${getMessageContent(message)}`);
-  console.log(`Attachments: ${getAttachmentNames(message)}`);
+  console.log(`Content: ${messageText(message)}`);
+  console.log(`Attachments: ${attachmentNames(message)}`);
   console.log(`Stickers: ${message.stickers.size}`);
   console.log(`Reason: ${reason}`);
-
-  console.log("========================================");
 }
 
 async function deleteMessage(message, type, reason) {
-  logDeletion(message, type, reason);
+  deleteLog(message, type, reason);
 
   try {
     await message.delete();
 
     console.log(
-      `✅ DELETE SUCCESS — ${message.id}`
+      `✅ DELETE SUCCESS: ${message.id}`
     );
 
   } catch (error) {
     console.error(
-      `❌ DELETE FAILED — ${message.id}`
+      `❌ DELETE FAILED: ${message.id}`
     );
 
     console.error(
-      `Error: ${error.message}`
+      error.message
     );
   }
 
@@ -213,7 +134,7 @@ async function deleteMessage(message, type, reason) {
 }
 
 // ==================================================
-// DOWNLOAD FILE
+// DOWNLOAD MEDIA
 // ==================================================
 
 async function downloadFile(url, outputPath) {
@@ -235,7 +156,7 @@ async function downloadFile(url, outputPath) {
 }
 
 // ==================================================
-// RUN FFMPEG
+// FFMPEG
 // ==================================================
 
 function runFFmpeg(args) {
@@ -243,12 +164,10 @@ function runFFmpeg(args) {
     execFile(
       ffmpegPath,
       args,
-      {
-        windowsHide: true
-      },
+      { windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
-          console.error("FFmpeg error:", stderr);
+          console.error("FFmpeg:", stderr);
           reject(error);
           return;
         }
@@ -263,12 +182,35 @@ function runFFmpeg(args) {
 }
 
 // ==================================================
-// EXTRACT FRAMES
+// CLEAN TEMP FILES
 // ==================================================
 
-async function extractFrames(mediaUrl, extension) {
+function cleanup(directory) {
+  try {
+    if (fs.existsSync(directory)) {
+      fs.rmSync(directory, {
+        recursive: true,
+        force: true
+      });
+    }
+  } catch (error) {
+    console.error(
+      "Cleanup failed:",
+      error.message
+    );
+  }
+}
+
+// ==================================================
+// EXTRACT MEDIA FRAMES
+// ==================================================
+
+async function extractFrames(url, extension) {
   const tempDir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "foodie-flex-")
+    path.join(
+      os.tmpdir(),
+      "foodie-flex-"
+    )
   );
 
   const inputPath = path.join(
@@ -277,7 +219,7 @@ async function extractFrames(mediaUrl, extension) {
   );
 
   await downloadFile(
-    mediaUrl,
+    url,
     inputPath
   );
 
@@ -307,8 +249,8 @@ async function extractFrames(mediaUrl, extension) {
       )
       .sort();
 
-    if (files.length === 0) {
-      const singleFrame = path.join(
+    if (!files.length) {
+      const fallback = path.join(
         tempDir,
         "single.jpg"
       );
@@ -321,69 +263,52 @@ async function extractFrames(mediaUrl, extension) {
         "1",
         "-q:v",
         "5",
-        singleFrame
+        fallback
       ]);
 
-      if (fs.existsSync(singleFrame)) {
+      if (fs.existsSync(fallback)) {
         files = ["single.jpg"];
       }
     }
 
-    const framePaths = files.map(
-      (file) => path.join(tempDir, file)
-    );
-
     return {
       tempDir,
-      inputPath,
-      framePaths
+      framePaths: files.map(
+        (file) =>
+          path.join(tempDir, file)
+      )
     };
 
   } catch (error) {
-    cleanupDirectory(tempDir);
+    cleanup(tempDir);
     throw error;
   }
 }
 
 // ==================================================
-// CLEAN TEMP DIRECTORY
+// IMAGE → DATA URL
 // ==================================================
 
-function cleanupDirectory(directory) {
-  try {
-    if (fs.existsSync(directory)) {
-      fs.rmSync(directory, {
-        recursive: true,
-        force: true
-      });
-    }
-  } catch (error) {
-    console.error(
-      "Temporary file cleanup failed:",
-      error.message
-    );
-  }
-}
+function imageDataUrl(filePath) {
+  const buffer =
+    fs.readFileSync(filePath);
 
-// ==================================================
-// FILE → DATA URL
-// ==================================================
-
-function fileToDataUrl(filePath) {
-  const buffer = fs.readFileSync(filePath);
-
-  return `data:image/jpeg;base64,${buffer.toString(
-    "base64"
-  )}`;
+  return (
+    "data:image/jpeg;base64," +
+    buffer.toString("base64")
+  );
 }
 
 // ==================================================
 // AI FOOD CHECK
 // ==================================================
 
-async function isFoodFrames(framePaths) {
-  if (!framePaths || framePaths.length === 0) {
-    console.log("❌ No frames available for AI check.");
+async function aiFoodCheck(framePaths) {
+  if (!framePaths.length) {
+    console.log(
+      "❌ No frames available."
+    );
+
     return false;
   }
 
@@ -393,42 +318,50 @@ async function isFoodFrames(framePaths) {
         type: "input_text",
         text:
           "Check these frames from one Discord media post. " +
-          "Reply ONLY YES if the media clearly shows food or a food/drink item " +
-          "as a main subject in at least one frame. " +
-          "Reply ONLY NO if it does not clearly show food. " +
-          "People, animals, scenery, screenshots, memes, logos, documents, " +
-          "ordinary objects, and unrelated content are NOT food."
+          "Reply ONLY YES if food or a food/drink item " +
+          "is clearly shown as a main subject in at least one frame. " +
+          "Reply ONLY NO otherwise. " +
+          "People, animals, scenery, screenshots, memes, logos, " +
+          "documents and ordinary objects are not food."
       }
     ];
 
-    for (const framePath of framePaths) {
+    for (const frame of framePaths) {
       content.push({
         type: "input_image",
-        image_url: fileToDataUrl(framePath)
+        image_url: imageDataUrl(frame)
       });
     }
 
-    const response = await openai.responses.create({
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "user",
-          content
-        }
-      ]
-    });
+    console.log(
+      "🤖 Sending media to AI..."
+    );
 
-    const result = response.output_text
-      .trim()
-      .toUpperCase();
+    const response =
+      await openai.responses.create({
+        model: "gpt-5.6-luna",
+        input: [
+          {
+            role: "user",
+            content
+          }
+        ]
+      });
 
-    console.log(`🤖 AI FOOD RESULT: ${result}`);
+    const result =
+      response.output_text
+        .trim()
+        .toUpperCase();
+
+    console.log(
+      `🤖 AI RESULT: ${result}`
+    );
 
     return result === "YES";
 
   } catch (error) {
     console.error(
-      "❌ AI FOOD CHECK FAILED:",
+      "❌ AI CHECK FAILED:",
       error.message
     );
 
@@ -440,52 +373,40 @@ async function isFoodFrames(framePaths) {
 // CHECK IMAGE / GIF
 // ==================================================
 
-async function checkImageOrGif(attachment) {
-  const url = attachment.url;
-
-  const name = (
-    attachment.name || ""
-  ).toLowerCase();
+async function checkImage(attachment) {
+  const name =
+    (attachment.name || "")
+      .toLowerCase();
 
   const isGif =
     attachment.contentType === "image/gif" ||
-    name.endsWith(".gif") ||
-    url.toLowerCase().includes(".gif");
+    name.endsWith(".gif");
 
-  let actualExtension = "jpg";
-
-  if (isGif) {
-    actualExtension = "gif";
-  } else {
-    const match = name.match(
-      /\.(jpg|jpeg|png|webp)$/i
-    );
-
-    if (match) {
-      actualExtension = match[1].toLowerCase();
-    }
-  }
+  const extension =
+    isGif
+      ? "gif"
+      : (
+          name.match(
+            /\.(jpg|jpeg|png|webp)$/i
+          )?.[1] || "jpg"
+        );
 
   console.log(
-    `🔎 AI CHECK STARTED — ${isGif ? "GIF" : "IMAGE"}`
+    `🔎 Checking ${isGif ? "GIF" : "IMAGE"} with AI...`
   );
 
-  const extracted = await extractFrames(
-    url,
-    actualExtension
-  );
+  const extracted =
+    await extractFrames(
+      attachment.url,
+      extension
+    );
 
   try {
-    console.log(
-      `Frames extracted: ${extracted.framePaths.length}`
-    );
-
-    return await isFoodFrames(
+    return await aiFoodCheck(
       extracted.framePaths
     );
-
   } finally {
-    cleanupDirectory(
+    cleanup(
       extracted.tempDir
     );
   }
@@ -497,39 +418,30 @@ async function checkImageOrGif(attachment) {
 
 async function checkVideo(attachment) {
   console.log(
-    "🎥 AI CHECK STARTED — VIDEO"
+    "🎥 Checking VIDEO with AI..."
   );
 
-  const name = (
-    attachment.name || ""
-  ).toLowerCase();
+  const name =
+    (attachment.name || "")
+      .toLowerCase();
 
-  let extension = "mp4";
+  const extension =
+    name.match(
+      /\.(mp4|mov|webm|mkv|avi)$/i
+    )?.[1] || "mp4";
 
-  const match = name.match(
-    /\.(mp4|mov|webm|mkv|avi)$/i
-  );
-
-  if (match) {
-    extension = match[1].toLowerCase();
-  }
-
-  const extracted = await extractFrames(
-    attachment.url,
-    extension
-  );
+  const extracted =
+    await extractFrames(
+      attachment.url,
+      extension
+    );
 
   try {
-    console.log(
-      `Video frames extracted: ${extracted.framePaths.length}`
-    );
-
-    return await isFoodFrames(
+    return await aiFoodCheck(
       extracted.framePaths
     );
-
   } finally {
-    cleanupDirectory(
+    cleanup(
       extracted.tempDir
     );
   }
@@ -541,33 +453,40 @@ async function checkVideo(attachment) {
 
 async function sendFoodReminder() {
   try {
-    const channel = await client.channels.fetch(
-      FOOD_CHANNEL_ID
-    );
+    const channel =
+      await client.channels.fetch(
+        FOOD_CHANNEL_ID
+      );
 
-    if (!channel || !channel.isTextBased()) {
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) {
       console.error(
         "❌ Food channel not found."
       );
+
       return;
     }
 
-    const messages = await channel.messages.fetch({
-      limit: 50
-    });
+    const messages =
+      await channel.messages.fetch({
+        limit: 50
+      });
 
-    const existingReminder = messages.find(
-      (msg) =>
-        msg.author.id === client.user.id &&
-        msg.embeds.length > 0 &&
-        msg.embeds[0].title ===
-          "🍽️ Foodie Reminder"
-    );
+    const existing =
+      messages.find(
+        (message) =>
+          message.author.id ===
+            client.user.id &&
+          message.embeds.length > 0 &&
+          message.embeds[0].title ===
+            "🍽️ Foodie Reminder"
+      );
 
-    if (existingReminder) {
-      if (!existingReminder.pinned) {
-        await existingReminder
-          .pin()
+    if (existing) {
+      if (!existing.pinned) {
+        await existing.pin()
           .catch(() => {});
       }
 
@@ -578,26 +497,30 @@ async function sendFoodReminder() {
       return;
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle("🍽️ Foodie Reminder")
-      .setDescription(
-        "\u200B\n" +
-        "**To post your food picture:**\n\n" +
-        "Say **Kain Po Tayo Team Ryzza**\n" +
-        "together with your food picture.\n\n" +
-        "\u200B\n" +
-        "🤖 **The Bot**\n\n" +
-        "will check your picture and only allow food pictures."
-      );
+    const embed =
+      new EmbedBuilder()
+        .setTitle(
+          "🍽️ Foodie Reminder"
+        )
+        .setDescription(
+          "\u200B\n" +
+          "**To post your food picture:**\n\n" +
+          "Say **Kain Po Tayo Team Ryzza**\n" +
+          "together with your food picture.\n\n" +
+          "\u200B\n" +
+          "🤖 **The Bot**\n\n" +
+          "will check your picture and only allow food pictures."
+        );
 
-    const reminder = await channel.send({
-      embeds: [embed]
-    });
+    const reminder =
+      await channel.send({
+        embeds: [embed]
+      });
 
     await reminder.pin();
 
     console.log(
-      `🍽️ Foodie Reminder sent and pinned. Message ID: ${reminder.id}`
+      `🍽️ Reminder sent and pinned: ${reminder.id}`
     );
 
   } catch (error) {
@@ -612,35 +535,41 @@ async function sendFoodReminder() {
 // BOT READY
 // ==================================================
 
-client.once("ready", async () => {
-  printSection("🤖 FOODIE FLEX ONLINE");
+client.once(
+  "ready",
+  async () => {
 
-  console.log(
-    `Logged in as: ${client.user.tag}`
-  );
+    section(
+      "🤖 FOODIE FLEX ONLINE"
+    );
 
-  console.log(
-    `Bot ID: ${client.user.id}`
-  );
+    console.log(
+      `Logged in as: ${client.user.tag}`
+    );
 
-  console.log(
-    `Food Channel ID: ${FOOD_CHANNEL_ID}`
-  );
+    console.log(
+      `Bot ID: ${client.user.id}`
+    );
 
-  console.log(
-    "Message moderation: ENABLED"
-  );
+    console.log(
+      `Food Channel ID: ${FOOD_CHANNEL_ID}`
+    );
 
-  console.log(
-    "AI food checking: ENABLED"
-  );
+    console.log(
+      "AI food checking: ENABLED"
+    );
 
-  console.log(
-    "========================================"
-  );
+    console.log(
+      "Fast deletion: ENABLED"
+    );
 
-  await sendFoodReminder();
-});
+    console.log(
+      "========================================"
+    );
+
+    await sendFoodReminder();
+  }
+);
 
 // ==================================================
 // MESSAGE HANDLER
@@ -650,11 +579,31 @@ client.on(
   "messageCreate",
   async (message) => {
 
-    // ==================================================
-    // BASIC MESSAGE LOG
-    // ==================================================
+    // --------------------------------------------------
+    // IGNORE MESSAGES FROM OTHER CHANNELS
+    // --------------------------------------------------
 
-    printSection("📨 MESSAGE RECEIVED");
+    if (
+      message.channel.id !==
+      FOOD_CHANNEL_ID
+    ) {
+      return;
+    }
+
+    // --------------------------------------------------
+    // IGNORE FOODIE FLEX'S OWN MESSAGES
+    // --------------------------------------------------
+
+    if (
+      message.author.id ===
+      client.user.id
+    ) {
+      return;
+    }
+
+    section(
+      "📨 MESSAGE RECEIVED"
+    );
 
     console.log(
       `Message ID: ${message.id}`
@@ -669,23 +618,7 @@ client.on(
     );
 
     console.log(
-      `Author ID: ${message.author.id}`
-    );
-
-    console.log(
-      `Webhook ID: ${message.webhookId || "NONE"}`
-    );
-
-    console.log(
-      `Message Type: ${message.type}`
-    );
-
-    console.log(
-      `Bot Author: ${message.author.bot}`
-    );
-
-    console.log(
-      `Content: ${getMessageContent(message)}`
+      `Content: ${messageText(message)}`
     );
 
     console.log(
@@ -693,7 +626,7 @@ client.on(
     );
 
     console.log(
-      `Attachment Names: ${getAttachmentNames(message)}`
+      `Attachment Names: ${attachmentNames(message)}`
     );
 
     console.log(
@@ -702,213 +635,160 @@ client.on(
 
     try {
 
-      // ==================================================
-      // ONLY FOOD CHANNEL
-      // ==================================================
-
-      if (
-        message.channel.id !==
-        FOOD_CHANNEL_ID
-      ) {
-        console.log(
-          `⏭️ IGNORED — Different channel`
-        );
-
-        console.log(
-          `Channel: ${message.channel.id}`
-        );
-
-        return;
-      }
-
-      // ==================================================
-      // IGNORE FOODIE FLEX'S OWN MESSAGES
-      // ==================================================
-
-      if (
-        message.author.id ===
-        client.user.id
-      ) {
-        console.log(
-          "⏭️ IGNORED — Foodie Flex's own message"
-        );
-
-        return;
-      }
-
-      // ==================================================
-      // DELETE OTHER BOT MESSAGES
-      // ==================================================
+      // --------------------------------------------------
+      // OTHER BOT
+      // --------------------------------------------------
 
       if (message.author.bot) {
 
         await deleteMessage(
           message,
           "BOT MESSAGE",
-          "Other bot messages are not allowed in the food channel"
+          "Other bot messages are not allowed"
         );
 
         return;
       }
 
-      // ==================================================
-      // CONTENT
-      // ==================================================
+      // --------------------------------------------------
+      // BASIC CONTENT
+      // --------------------------------------------------
 
-      const content = (
-        message.content || ""
-      )
-        .toLowerCase()
-        .trim();
+      const content =
+        (message.content || "")
+          .trim();
+
+      const lowerContent =
+        content.toLowerCase();
 
       const hasTrigger =
-        content.includes(TRIGGER);
+        lowerContent.includes(
+          TRIGGER
+        );
 
-      // ==================================================
-      // ATTACHMENTS
-      // ==================================================
+      const attachments =
+        [...message.attachments.values()];
 
-      const attachments = [
-        ...message.attachments.values()
-      ];
-
-      // ==================================================
-      // IMAGE / GIF
-      // ==================================================
-
-      const image = attachments.find(
-        (attachment) => {
-
-          const type =
-            attachment.contentType || "";
-
-          const name =
-            attachment.name || "";
-
-          const url =
-            attachment.url || "";
-
-          return (
-            type.startsWith("image/") ||
-            /\.(jpg|jpeg|png|webp|gif)$/i.test(
-              name
-            ) ||
-            /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(
-              url
-            )
-          );
-        }
-      );
-
-      // ==================================================
-      // VIDEO
-      // ==================================================
-
-      const video = attachments.find(
-        (attachment) => {
-
-          const type =
-            attachment.contentType || "";
-
-          const name =
-            attachment.name || "";
-
-          const url =
-            attachment.url || "";
-
-          return (
-            type.startsWith("video/") ||
-            /\.(mp4|mov|webm|mkv|avi)$/i.test(
-              name
-            ) ||
-            /\.(mp4|mov|webm|mkv|avi)(\?|$)/i.test(
-              url
-            )
-          );
-        }
-      );
-
-      // ==================================================
-      // AUDIO / VOICE
-      // ==================================================
-
-      const audio = attachments.find(
-        (attachment) => {
-
-          const type =
-            attachment.contentType || "";
-
-          const name =
-            attachment.name || "";
-
-          return (
-            type.startsWith("audio/") ||
-            /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(
-              name
-            )
-          );
-        }
-      );
-
-      // ==================================================
+      // --------------------------------------------------
       // STICKER
-      // ==================================================
+      // --------------------------------------------------
 
       const hasSticker =
-        message.stickers &&
         message.stickers.size > 0;
 
+      // --------------------------------------------------
+      // AUDIO
+      // --------------------------------------------------
+
+      const audio =
+        attachments.find(
+          (attachment) => {
+
+            const type =
+              attachment.contentType || "";
+
+            const name =
+              (attachment.name || "")
+                .toLowerCase();
+
+            return (
+              type.startsWith("audio/") ||
+              /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i
+                .test(name)
+            );
+          }
+        );
+
+      // --------------------------------------------------
+      // IMAGE / GIF
+      // --------------------------------------------------
+
+      const image =
+        attachments.find(
+          (attachment) => {
+
+            const type =
+              attachment.contentType || "";
+
+            const name =
+              (attachment.name || "")
+                .toLowerCase();
+
+            return (
+              type.startsWith("image/") ||
+              /\.(jpg|jpeg|png|webp|gif)$/i
+                .test(name)
+            );
+          }
+        );
+
+      // --------------------------------------------------
+      // VIDEO
+      // --------------------------------------------------
+
+      const video =
+        attachments.find(
+          (attachment) => {
+
+            const type =
+              attachment.contentType || "";
+
+            const name =
+              (attachment.name || "")
+                .toLowerCase();
+
+            return (
+              type.startsWith("video/") ||
+              /\.(mp4|mov|webm|mkv|avi)$/i
+                .test(name)
+            );
+          }
+        );
+
       // ==================================================
-      // CONTENT CHECK LOG
+      // FAST DELETE SECTION
       // ==================================================
 
-      printSection("🔍 CONTENT CHECK");
+      // TEXT / EMOJI WITHOUT MEDIA
+      if (
+        !image &&
+        !video &&
+        !audio &&
+        !hasSticker
+      ) {
 
-      console.log(
-        `Trigger: ${hasTrigger ? "YES" : "NO"}`
-      );
+        await deleteMessage(
+          message,
+          "TEXT / EMOJI",
+          "Text and emojis are not allowed in the food channel"
+        );
 
-      console.log(
-        `Image: ${image ? "YES" : "NO"}`
-      );
+        return;
+      }
 
-      console.log(
-        `GIF: ${
-          image &&
-          (
-            image.contentType === "image/gif" ||
-            (image.name || "")
-              .toLowerCase()
-              .endsWith(".gif")
-          )
-            ? "YES"
-            : "NO"
-        }`
-      );
+      // STICKER
+      if (hasSticker) {
 
-      console.log(
-        `Video: ${video ? "YES" : "NO"}`
-      );
+        await deleteMessage(
+          message,
+          "STICKER",
+          "Stickers are not allowed"
+        );
 
-      console.log(
-        `Audio / Voice: ${audio ? "YES" : "NO"}`
-      );
+        return;
+      }
 
-      console.log(
-        `Sticker: ${hasSticker ? "YES" : "NO"}`
-      );
+      // AUDIO / VOICE
+      if (audio) {
 
-      console.log(
-        `Text: ${
-          content
-            ? "YES"
-            : "NO"
-        }`
-      );
+        await deleteMessage(
+          message,
+          "VOICE / AUDIO",
+          "Voice/audio messages are not allowed"
+        );
 
-      console.log(
-        "========================================"
-      );
+        return;
+      }
 
       // ==================================================
       // NO TRIGGER
@@ -916,113 +796,46 @@ client.on(
 
       if (!hasTrigger) {
 
-        let reason =
-          "Required trigger is missing";
-
-        let type =
-          getContentType(message);
-
-        // Small text / emoji
-        if (
-          content &&
-          !image &&
-          !video &&
-          !audio &&
-          !hasSticker
-        ) {
-
-          reason =
-            "Small words / normal text / emojis are not allowed";
-
-          type =
-            "SMALL TEXT / EMOJI";
-        }
-
-        if (hasSticker) {
-
-          reason =
-            "Sticker/server sticker is not allowed without the trigger";
-
-          type =
-            "STICKER";
-        }
-
         if (image) {
 
           const isGif =
-            image.contentType === "image/gif" ||
+            image.contentType ===
+              "image/gif" ||
             (image.name || "")
               .toLowerCase()
               .endsWith(".gif");
 
-          type =
-            isGif
-              ? "GIF"
-              : "IMAGE";
+          await deleteMessage(
+            message,
+            isGif ? "GIF" : "IMAGE",
+            "Trigger missing — media posts require Kain Po Tayo Team Ryzza"
+          );
 
-          reason =
-            `Trigger missing — ${type.toLowerCase()} posts require "Kain Po Tayo Team Ryzza"`;
+          return;
         }
 
         if (video) {
 
-          type =
-            "VIDEO";
+          await deleteMessage(
+            message,
+            "VIDEO",
+            "Trigger missing — video posts require Kain Po Tayo Team Ryzza"
+          );
 
-          reason =
-            'Trigger missing — video posts require "Kain Po Tayo Team Ryzza"';
-        }
-
-        if (audio) {
-
-          type =
-            "VOICE / AUDIO";
-
-          reason =
-            "Voice/audio messages are not allowed";
+          return;
         }
 
         await deleteMessage(
           message,
-          type,
-          reason
+          "UNSUPPORTED",
+          "Trigger missing"
         );
 
         return;
       }
 
       // ==================================================
-      // AUDIO / VOICE
-      // ==================================================
-
-      if (audio) {
-
-        await deleteMessage(
-          message,
-          "VOICE / AUDIO",
-          "Voice/audio messages are not allowed, even with the trigger"
-        );
-
-        return;
-      }
-
-      // ==================================================
-      // STICKER
-      // ==================================================
-
-      if (hasSticker) {
-
-        await deleteMessage(
-          message,
-          "STICKER",
-          "Stickers/server stickers are not allowed"
-        );
-
-        return;
-      }
-
-      // ==================================================
-      // TRIGGER WITHOUT MEDIA
+      // TRIGGER BUT NO MEDIA
       // ==================================================
 
       if (!image && !video) {
@@ -1030,83 +843,57 @@ client.on(
         await deleteMessage(
           message,
           "TEXT ONLY",
-          'Trigger found, but no food image/GIF/video was attached'
+          "Trigger was found, but no image/GIF/video was attached"
         );
 
         return;
       }
 
       // ==================================================
-      // VIDEO
+      // VIDEO + TRIGGER
       // ==================================================
 
       if (video) {
 
-        console.log("");
-        console.log("🎥 VIDEO FOOD CHECK");
         console.log(
-          `Author: ${message.author.tag}`
-        );
-        console.log(
-          "AI is checking video frames..."
+          "🎥 Trigger found."
         );
 
-        let foodVideo = false;
+        console.log(
+          "🤖 Starting video AI check..."
+        );
+
+        let isFood = false;
 
         try {
-
-          foodVideo =
+          isFood =
             await checkVideo(video);
-
         } catch (error) {
-
           console.error(
-            "❌ VIDEO FOOD CHECK FAILED:",
+            "Video check failed:",
             error.message
           );
-
-          foodVideo = false;
         }
 
-        if (!foodVideo) {
+        if (!isFood) {
 
           await deleteMessage(
             message,
             "VIDEO",
-            "AI check says the video does not clearly show food"
+            "AI determined that the video is not food"
           );
 
           return;
         }
-
-        // ==================================================
-        // FOOD VIDEO APPROVED
-        // ==================================================
 
         console.log(
-          "✅ AI APPROVED — VIDEO IS FOOD"
+          "✅ AI APPROVED — FOOD VIDEO"
         );
 
-        const originalMessageId =
+        const originalId =
           message.id;
 
-        try {
-
-          await message.delete();
-
-          console.log(
-            `Original video ${originalMessageId} deleted successfully.`
-          );
-
-        } catch (error) {
-
-          console.error(
-            "❌ Original video delete failed:",
-            error.message
-          );
-
-          return;
-        }
+        await message.delete();
 
         const reposted =
           await message.channel.send({
@@ -1115,119 +902,73 @@ client.on(
             files: [video.url]
           });
 
-        printSection("✅ FOOD VIDEO APPROVED");
-
-        console.log(
-          `Original Message ID: ${originalMessageId}`
+        section(
+          "✅ FOOD VIDEO APPROVED"
         );
 
         console.log(
-          `Reposted Message ID: ${reposted.id}`
+          `Original: ${originalId}`
         );
 
         console.log(
-          "Result: FOOD VIDEO ALLOWED"
-        );
-
-        console.log(
-          "========================================"
+          `Reposted: ${reposted.id}`
         );
 
         return;
       }
 
       // ==================================================
-      // IMAGE / GIF
+      // IMAGE / GIF + TRIGGER
       // ==================================================
 
       if (image) {
 
         const isGif =
-          image.contentType === "image/gif" ||
+          image.contentType ===
+            "image/gif" ||
           (image.name || "")
             .toLowerCase()
             .endsWith(".gif");
 
-        const mediaType =
-          isGif
-            ? "GIF"
-            : "IMAGE";
-
-        console.log("");
         console.log(
-          `🖼️ ${mediaType} FOOD CHECK`
+          `🖼️ ${isGif ? "GIF" : "IMAGE"} + TRIGGER`
         );
 
         console.log(
-          `Author: ${message.author.tag}`
+          "🤖 Starting AI food check..."
         );
 
-        console.log(
-          "AI is checking media..."
-        );
-
-        let foodImage = false;
+        let isFood = false;
 
         try {
-
-          foodImage =
-            await checkImageOrGif(
-              image
-            );
-
+          isFood =
+            await checkImage(image);
         } catch (error) {
-
           console.error(
-            `❌ ${mediaType} FOOD CHECK FAILED:`,
+            "Image check failed:",
             error.message
           );
-
-          foodImage = false;
         }
 
-        // ==================================================
-        // NOT FOOD
-        // ==================================================
-
-        if (!foodImage) {
+        if (!isFood) {
 
           await deleteMessage(
             message,
-            mediaType,
-            `AI check says the ${mediaType.toLowerCase()} does not clearly show food`
+            isGif ? "GIF" : "IMAGE",
+            `AI determined that the ${isGif ? "GIF" : "image"} is not food`
           );
 
           return;
         }
-
-        // ==================================================
-        // FOOD APPROVED
-        // ==================================================
 
         console.log(
-          `✅ AI APPROVED — ${mediaType} IS FOOD`
+          `✅ AI APPROVED — FOOD ${isGif ? "GIF" : "IMAGE"}`
         );
 
-        const originalMessageId =
+        const originalId =
           message.id;
 
-        try {
-
-          await message.delete();
-
-          console.log(
-            `Original ${mediaType.toLowerCase()} ${originalMessageId} deleted successfully.`
-          );
-
-        } catch (error) {
-
-          console.error(
-            `❌ Original ${mediaType.toLowerCase()} delete failed:`,
-            error.message
-          );
-
-          return;
-        }
+        await message.delete();
 
         const reposted =
           await message.channel.send({
@@ -1236,24 +977,16 @@ client.on(
             files: [image.url]
           });
 
-        printSection(
-          `✅ FOOD ${mediaType} APPROVED`
+        section(
+          `✅ FOOD ${isGif ? "GIF" : "IMAGE"} APPROVED`
         );
 
         console.log(
-          `Original Message ID: ${originalMessageId}`
+          `Original: ${originalId}`
         );
 
         console.log(
-          `Reposted Message ID: ${reposted.id}`
-        );
-
-        console.log(
-          `Result: FOOD ${mediaType} ALLOWED`
-        );
-
-        console.log(
-          "========================================"
+          `Reposted: ${reposted.id}`
         );
 
         return;
@@ -1265,23 +998,18 @@ client.on(
 
       await deleteMessage(
         message,
-        getContentType(message),
+        "UNKNOWN",
         "Unsupported content"
       );
 
     } catch (error) {
 
-      console.error("");
       console.error(
-        "❌ MESSAGE HANDLER ERROR"
+        "❌ MESSAGE HANDLER ERROR:"
       );
 
       console.error(
         error
-      );
-
-      console.error(
-        "========================================"
       );
     }
   }
@@ -1291,4 +1019,6 @@ client.on(
 // LOGIN
 // ==================================================
 
-client.login(DISCORD_TOKEN);
+client.login(
+  DISCORD_TOKEN
+);
