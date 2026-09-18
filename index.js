@@ -4,7 +4,8 @@ const OpenAI = require("openai");
 const {
   Client,
   GatewayIntentBits,
-  PermissionsBitField
+  PermissionsBitField,
+  ChannelType
 } = require("discord.js");
 
 // =====================================================
@@ -60,7 +61,7 @@ const client = new Client({
 });
 
 // =====================================================
-// FOODIE SETTINGS
+// SETTINGS
 // =====================================================
 
 const FOOD_CHANNEL_ID = "1550189625954402314";
@@ -69,12 +70,19 @@ const TRIGGER = "kain po tayo team ryzza";
 
 const AI_MODEL = "gpt-5.6-luna";
 
-// Maximum time before logging that AI is taking longer.
-// It does NOT automatically reject the food.
 const AI_TIMEOUT_MS = 7000;
 
-// Discord channel slowmode.
+// Discord slowmode
 const SLOWMODE_SECONDS = 5;
+
+// =====================================================
+// PARTY CHAT SETTINGS
+// =====================================================
+
+const PARTY_THREAD_NAME = "💬 Kain Po Tayo — Party Chat";
+
+// The bot remembers the thread while running.
+let partyThreadId = null;
 
 // =====================================================
 // FOOD EMOJIS
@@ -98,25 +106,8 @@ function getFoodEmoji() {
 }
 
 // =====================================================
-// GLOBAL FOOD SUBMISSION QUEUE
+// GLOBAL FOOD QUEUE
 // =====================================================
-//
-// IMPORTANT:
-//
-// Only ONE submission is processed at a time.
-//
-// Example:
-//
-// Account A → processing
-// Account B → waiting
-// Account C → waiting
-//
-// When A finishes:
-// Account B → processing
-// Account C → waiting
-//
-// This works across DIFFERENT Discord accounts.
-//
 
 const foodQueue = [];
 
@@ -133,10 +124,8 @@ function addToFoodQueue(job) {
 }
 
 async function processFoodQueue() {
-  // Another submission is already being processed.
   if (processingFood) return;
 
-  // Nothing to process.
   if (foodQueue.length === 0) return;
 
   processingFood = true;
@@ -151,7 +140,7 @@ async function processFoodQueue() {
     await processFoodSubmission(job);
   } catch (error) {
     console.error(
-      "❌ Food submission processing error:",
+      "❌ Food processing error:",
       error.message
     );
 
@@ -166,26 +155,23 @@ async function processFoodQueue() {
 
   console.log("✅ Food submission finished.");
 
-  // Process the next person in line.
   if (foodQueue.length > 0) {
-    console.log(
-      `➡️ Moving to next food submission. ${foodQueue.length} remaining.`
-    );
-
     setImmediate(processFoodQueue);
   }
 }
 
 // =====================================================
-// TRIGGER CHECK
+// EXACT TRIGGER
 // =====================================================
 
 function hasExactTrigger(message) {
-  return message.content.trim().toLowerCase() === TRIGGER;
+  return (
+    message.content.trim().toLowerCase() === TRIGGER
+  );
 }
 
 // =====================================================
-// MEDIA CHECK
+// MEDIA
 // =====================================================
 
 function isImage(attachment) {
@@ -311,12 +297,11 @@ async function checkIfFood(
     ]
   });
 
-  // ===================================================
-  // AI TIME NOTICE
-  // ===================================================
-
   const timeoutPromise = new Promise(resolve => {
-    setTimeout(() => resolve(null), AI_TIMEOUT_MS);
+    setTimeout(
+      () => resolve(null),
+      AI_TIMEOUT_MS
+    );
   });
 
   const firstResult = await Promise.race([
@@ -345,40 +330,148 @@ async function checkIfFood(
 }
 
 // =====================================================
+// CREATE / FIND ONE PUBLIC PARTY THREAD
+// =====================================================
+
+async function ensurePartyThread(channel) {
+  try {
+    // If we already know the thread ID, fetch it.
+    if (partyThreadId) {
+      try {
+        const existing =
+          await channel.threads.fetch(
+            partyThreadId
+          );
+
+        if (existing) {
+          // Re-open if archived.
+          if (existing.archived) {
+            try {
+              await existing.setArchived(false);
+            } catch {}
+          }
+
+          return existing;
+        }
+      } catch {
+        partyThreadId = null;
+      }
+    }
+
+    // Search active threads.
+    const active =
+      await channel.threads.fetchActive();
+
+    let thread = active.threads.find(
+      thread =>
+        thread.name === PARTY_THREAD_NAME
+    );
+
+    // Search archived public threads too.
+    if (!thread) {
+      try {
+        const archived =
+          await channel.threads.fetchArchived({
+            type: "public",
+            limit: 100
+          });
+
+        thread = archived.threads.find(
+          thread =>
+            thread.name === PARTY_THREAD_NAME
+        );
+      } catch (error) {
+        console.error(
+          "⚠️ Could not search archived threads:",
+          error.message
+        );
+      }
+    }
+
+    // If found, reuse it.
+    if (thread) {
+      partyThreadId = thread.id;
+
+      if (thread.archived) {
+        try {
+          await thread.setArchived(false);
+        } catch {}
+      }
+
+      console.log(
+        `💬 Existing Party Chat found: ${thread.id}`
+      );
+
+      return thread;
+    }
+
+    // =================================================
+    // CREATE THE ONE PUBLIC THREAD
+    // =================================================
+
+    thread = await channel.threads.create({
+      name: PARTY_THREAD_NAME,
+
+      type: ChannelType.PublicThread,
+
+      autoArchiveDuration: 10080,
+
+      reason:
+        "Create the single public Foodie Party Chat"
+    });
+
+    partyThreadId = thread.id;
+
+    await thread.send(
+      "🍽️ **Kain Po Tayo Team Ryzza Party Chat**\n" +
+      "Everyone can chat here about the food posts!"
+    );
+
+    console.log(
+      `💬 Created one public Party Chat thread: ${thread.id}`
+    );
+
+    return thread;
+
+  } catch (error) {
+    console.error(
+      "❌ Failed to create/find Party Chat:",
+      error.message
+    );
+
+    return null;
+  }
+}
+
+// =====================================================
 // FOOD REMINDER
 // =====================================================
 
 async function ensureReminder(channel) {
   try {
-    const messages = await channel.messages.fetch({
-      limit: 100
-    });
+    const messages =
+      await channel.messages.fetch({
+        limit: 100
+      });
 
-    const existingReminder = messages.find(
-      message => {
-        if (!message.author.bot) return false;
+    const existingReminder =
+      messages.find(message => {
+        if (!message.author.bot) {
+          return false;
+        }
 
         return message.embeds.some(
           embed =>
-            embed.title === "🍽️ Foodie Reminder"
+            embed.title ===
+            "🍽️ Foodie Reminder"
         );
-      }
-    );
+      });
 
     if (existingReminder) {
       if (!existingReminder.pinned) {
         try {
           await existingReminder.pin();
-
-          console.log(
-            "📌 Existing reminder pinned."
-          );
-        } catch (error) {
-          console.error(
-            "❌ Could not pin existing reminder:",
-            error.message
-          );
-        }
+        } catch {}
       }
 
       console.log(
@@ -388,27 +481,23 @@ async function ensureReminder(channel) {
       return;
     }
 
-    const reminder = await channel.send({
-      embeds: [
-        {
-          title: "🍽️ Foodie Reminder",
+    const reminder =
+      await channel.send({
+        embeds: [
+          {
+            title: "🍽️ Foodie Reminder",
 
-          description:
-            "Post your food here with **Kain Po Tayo Team Ryzza** + a picture.",
+            description:
+              "Post your food here with **Kain Po Tayo Team Ryzza** + a picture.",
 
-          color: 0xf5a623
-        }
-      ]
-    });
+            color: 0xf5a623
+          }
+        ]
+      });
 
     try {
       await reminder.pin();
-    } catch (error) {
-      console.error(
-        "❌ Could not pin reminder:",
-        error.message
-      );
-    }
+    } catch {}
 
     console.log(
       "📌 New Foodie Reminder created and pinned."
@@ -461,12 +550,12 @@ async function ensureSlowmode(channel) {
 async function processFoodSubmission(job) {
   const {
     user,
+    channel,
     imageBuffer,
     imageName,
     mimeType
   } = job;
 
-  // Tell this user their turn has started.
   try {
     await user.send(
       "🔍 Checking your food picture..."
@@ -474,7 +563,7 @@ async function processFoodSubmission(job) {
   } catch {}
 
   // ===================================================
-  // AI CHECK
+  // AI
   // ===================================================
 
   let isFood = false;
@@ -519,32 +608,53 @@ async function processFoodSubmission(job) {
   }
 
   // ===================================================
-  // FOOD APPROVED
+  // APPROVED FOOD
   // ===================================================
 
   const emoji = getFoodEmoji();
 
   try {
-    await job.channel.send({
-      content:
-        `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${emoji}**\n` +
-        `👤 <@${user.id}>`,
+    const foodPost =
+      await channel.send({
+        content:
+          `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${emoji}**\n` +
+          `👤 <@${user.id}>`,
 
-      files: [
-        {
-          attachment: imageBuffer,
-          name: imageName || "food.jpg"
+        files: [
+          {
+            attachment: imageBuffer,
+            name: imageName || "food.jpg"
+          }
+        ],
+
+        allowedMentions: {
+          users: [user.id]
         }
-      ],
-
-      allowedMentions: {
-        users: [user.id]
-      }
-    });
+      });
 
     console.log(
       `🍕 Food approved and posted for ${user.tag}`
     );
+
+    // =================================================
+    // ENSURE ONE PUBLIC PARTY THREAD
+    // =================================================
+
+    const partyThread =
+      await ensurePartyThread(channel);
+
+    if (partyThread) {
+      try {
+        await partyThread.send(
+          `🍽️ New food post from <@${user.id}>!`
+        );
+      } catch (error) {
+        console.error(
+          "❌ Could not notify Party Chat:",
+          error.message
+        );
+      }
+    }
 
     try {
       await user.send(
@@ -583,7 +693,8 @@ async function cleanupChannel(channel) {
       const isReminder =
         message.embeds.some(
           embed =>
-            embed.title === "🍽️ Foodie Reminder"
+            embed.title ===
+            "🍽️ Foodie Reminder"
         );
 
       if (isReminder && message.pinned) {
@@ -595,12 +706,7 @@ async function cleanupChannel(channel) {
           await message.delete();
           deleted++;
         }
-      } catch (error) {
-        console.error(
-          "❌ Cleanup delete error:",
-          error.message
-        );
-      }
+      } catch {}
     }
 
     const confirmation =
@@ -643,7 +749,8 @@ async function cleanupUser(channel, user) {
       const isReminder =
         message.embeds.some(
           embed =>
-            embed.title === "🍽️ Foodie Reminder"
+            embed.title ===
+            "🍽️ Foodie Reminder"
         );
 
       if (isReminder && message.pinned) {
@@ -655,12 +762,7 @@ async function cleanupUser(channel, user) {
           await message.delete();
           deleted++;
         }
-      } catch (error) {
-        console.error(
-          "❌ User cleanup delete error:",
-          error.message
-        );
-      }
+      } catch {}
     }
 
     const confirmation =
@@ -712,9 +814,14 @@ client.once("ready", async () => {
       return;
     }
 
+    // Enable Discord slowmode.
     await ensureSlowmode(channel);
 
+    // Keep one pinned reminder.
     await ensureReminder(channel);
+
+    // Create/find the ONE public Party Chat.
+    await ensurePartyThread(channel);
 
     console.log(
       "🍕 Foodie system is ready."
@@ -736,8 +843,7 @@ client.on(
   "messageCreate",
   async message => {
 
-    // Ignore bot messages.
-    // Bot-generated food posts and reminder stay.
+    // Bot posts stay visible.
     if (message.author.bot) return;
 
     // Only Foodie channel.
@@ -749,7 +855,7 @@ client.on(
     }
 
     // =================================================
-    // MODERATOR CLEANUP
+    // CLEANUP COMMAND
     // =================================================
 
     if (
@@ -787,7 +893,7 @@ client.on(
     }
 
     // =================================================
-    // EXACT TRIGGER
+    // TRIGGER
     // =================================================
 
     const triggerUsed =
@@ -804,10 +910,10 @@ client.on(
       hasMedia(message);
 
     // =================================================
-    // SUBMISSION-ONLY CHANNEL
+    // SUBMISSION ONLY
     // =================================================
 
-    // Normal chat / emoji / server emoji / Nitro emoji
+    // Normal chat / emoji
     if (
       !triggerUsed &&
       !hasAnyMedia
@@ -845,11 +951,9 @@ client.on(
     }
 
     // =================================================
-    // VIDEO WITHOUT IMAGE
+    // VIDEO ONLY
     // =================================================
 
-    // This version AI-checks pictures.
-    // We do not pretend that a raw video was checked.
     if (!imageAttachment) {
       await safeDelete(message);
 
@@ -892,7 +996,7 @@ client.on(
     }
 
     // =================================================
-    // DELETE ORIGINAL IMMEDIATELY
+    // DELETE ORIGINAL
     // =================================================
 
     await safeDelete(message);
@@ -922,12 +1026,13 @@ client.on(
     });
 
     // =================================================
-    // PRIVATE QUEUE NOTICE
+    // QUEUE NOTICE
     // =================================================
 
-    // Only send a waiting message if someone is
-    // already being processed or other users are ahead.
-    if (processingFood || foodQueue.length > 1) {
+    if (
+      processingFood ||
+      foodQueue.length > 1
+    ) {
       try {
         await message.author.send(
           `⏳ Your food picture is in the queue. You are approximately #${queuePosition} in line.`
