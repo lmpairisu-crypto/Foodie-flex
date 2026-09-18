@@ -4,10 +4,14 @@ const {
   Client,
   GatewayIntentBits,
   PermissionsBitField,
-  EmbedBuilder,
-  AttachmentBuilder
+  AttachmentBuilder,
+  EmbedBuilder
 } = require("discord.js");
 const OpenAI = require("openai");
+
+// ==================================================
+// HEALTH SERVER
+// ==================================================
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -20,28 +24,25 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`Health server running on port ${PORT}`);
 });
 
-// ===============================
+// ==================================================
 // CONFIG
-// ===============================
+// ==================================================
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// Food channel ID
 const FOOD_CHANNEL_ID = "1550189625954402314";
 
-// Exact trigger
 const TRIGGER = "kain po tayo team ryzza";
 
-// AI model
 const AI_MODEL = "gpt-5.6-luna";
 
-// Maximum AI waiting time
+// 7 seconds gives the AI enough time to inspect the image.
 const AI_TIMEOUT_MS = 7000;
 
-// ===============================
-// CHECK ENVIRONMENT VARIABLES
-// ===============================
+// ==================================================
+// ENVIRONMENT CHECK
+// ==================================================
 
 if (!DISCORD_TOKEN) {
   console.error("DISCORD_TOKEN is missing.");
@@ -56,17 +57,17 @@ if (!OPENAI_API_KEY) {
 console.log("DISCORD_TOKEN loaded.");
 console.log("OPENAI_API_KEY loaded.");
 
-// ===============================
+// ==================================================
 // OPENAI
-// ===============================
+// ==================================================
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY
 });
 
-// ===============================
+// ==================================================
 // DISCORD CLIENT
-// ===============================
+// ==================================================
 
 const client = new Client({
   intents: [
@@ -76,9 +77,9 @@ const client = new Client({
   ]
 });
 
-// ===============================
+// ==================================================
 // FOOD EMOJIS
-// ===============================
+// ==================================================
 
 const FOOD_EMOJIS = [
   "🍞", "🥖", "🥐", "🍳", "🥚", "🧀", "🥨", "🫓",
@@ -97,9 +98,9 @@ function getFoodEmoji() {
   ];
 }
 
-// ===============================
+// ==================================================
 // HELPERS
-// ===============================
+// ==================================================
 
 function hasExactTrigger(content) {
   return content.trim().toLowerCase() === TRIGGER;
@@ -117,13 +118,39 @@ function isImage(attachment) {
   return /\.(jpg|jpeg|png|webp|gif)$/i.test(name);
 }
 
+function isVideo(attachment) {
+  if (!attachment) return false;
+
+  if (attachment.contentType?.startsWith("video/")) {
+    return true;
+  }
+
+  const name = attachment.name?.toLowerCase() || "";
+
+  return /\.(mp4|mov|webm|m4v)$/i.test(name);
+}
+
+function hasMedia(message) {
+  return message.attachments.some(
+    (attachment) =>
+      isImage(attachment) || isVideo(attachment)
+  );
+}
+
+function getImageAttachment(message) {
+  return message.attachments.find(isImage) || null;
+}
+
 async function safeDelete(message) {
   try {
     if (message.deletable) {
       await message.delete();
     }
   } catch (error) {
-    console.error("Could not delete message:", error.message);
+    console.error(
+      "Could not delete message:",
+      error.message
+    );
   }
 }
 
@@ -141,9 +168,20 @@ async function downloadAttachment(url) {
   return Buffer.from(arrayBuffer);
 }
 
-// ===============================
+async function sendPrivateDM(user, content) {
+  try {
+    await user.send(content);
+  } catch (error) {
+    console.error(
+      "Could not send private DM:",
+      error.message
+    );
+  }
+}
+
+// ==================================================
 // AI FOOD CHECK
-// ===============================
+// ==================================================
 
 async function checkIfFood(imageUrl) {
   console.log("Starting AI food check...");
@@ -173,6 +211,7 @@ IMPORTANT:
 - Drinks also count as FOOD.
 - Multiple people are okay.
 - Background objects are okay.
+- A restaurant, table, kitchen, or other surroundings do not make it NOT_FOOD.
 - Only reply NOT_FOOD when there is no clearly visible food or drink anywhere in the image.
             `.trim()
           },
@@ -185,11 +224,6 @@ IMPORTANT:
     ]
   });
 
-  // IMPORTANT:
-  // Timeout returns null instead of false.
-  // This prevents a slow AI response from
-  // incorrectly rejecting a valid food picture.
-
   const timeout = new Promise((resolve) => {
     setTimeout(() => {
       resolve(null);
@@ -201,24 +235,29 @@ IMPORTANT:
     timeout
   ]);
 
-  // AI took longer than 7 seconds.
-  if (result === null) {
-    console.log("AI check exceeded 7 seconds.");
+  // IMPORTANT:
+  // A timeout is NOT considered NOT_FOOD.
+  // We wait for the actual AI result.
 
-    // Wait for the actual AI result instead of
-    // incorrectly treating the timeout as NOT_FOOD.
+  if (result === null) {
+    console.log(
+      "AI has taken longer than 7 seconds. Waiting for result..."
+    );
+
     try {
       const finalResult = await aiRequest;
 
       const text =
-        finalResult.output_text?.trim().toUpperCase() || "";
+        finalResult.output_text
+          ?.trim()
+          .toUpperCase() || "";
 
       console.log("AI final result:", text);
 
       return text === "FOOD";
     } catch (error) {
       console.error(
-        "AI check failed after timeout:",
+        "AI check failed:",
         error.message
       );
 
@@ -227,16 +266,18 @@ IMPORTANT:
   }
 
   const text =
-    result.output_text?.trim().toUpperCase() || "";
+    result.output_text
+      ?.trim()
+      .toUpperCase() || "";
 
   console.log("AI result:", text);
 
   return text === "FOOD";
 }
 
-// ===============================
-// FOOD REMINDER
-// ===============================
+// ==================================================
+// FOODIE REMINDER
+// ==================================================
 
 async function ensureReminder(channel) {
   try {
@@ -244,23 +285,28 @@ async function ensureReminder(channel) {
       limit: 100
     });
 
-    const existingReminder = messages.find((message) => {
-      if (message.author.id !== client.user.id) {
-        return false;
-      }
+    const existingReminder = messages.find(
+      (message) => {
+        if (message.author.id !== client.user.id) {
+          return false;
+        }
 
-      return message.embeds.some(
-        (embed) =>
-          embed.title === "🍽️ Foodie Reminder"
-      );
-    });
+        return message.embeds.some(
+          (embed) =>
+            embed.title === "🍽️ Foodie Reminder"
+        );
+      }
+    );
 
     if (existingReminder) {
       if (!existingReminder.pinned) {
         await existingReminder.pin().catch(() => {});
       }
 
-      console.log("Existing Foodie Reminder found.");
+      console.log(
+        "Existing Foodie Reminder found."
+      );
+
       return;
     }
 
@@ -276,7 +322,9 @@ async function ensureReminder(channel) {
 
     await reminder.pin().catch(() => {});
 
-    console.log("Foodie Reminder created and pinned.");
+    console.log(
+      "Foodie Reminder created and pinned."
+    );
   } catch (error) {
     console.error(
       "Could not create/find reminder:",
@@ -285,9 +333,9 @@ async function ensureReminder(channel) {
   }
 }
 
-// ===============================
+// ==================================================
 // CLEANUP
-// ===============================
+// ==================================================
 
 async function cleanupChannel(channel) {
   let deleted = 0;
@@ -297,7 +345,7 @@ async function cleanupChannel(channel) {
   });
 
   for (const message of messages.values()) {
-    // Keep the pinned reminder
+    // Never delete the pinned Foodie Reminder.
     if (
       message.pinned &&
       message.author.id === client.user.id &&
@@ -335,7 +383,7 @@ async function cleanupUser(channel, userId) {
       continue;
     }
 
-    // Keep the pinned reminder
+    // Never delete the pinned Foodie Reminder.
     if (
       message.pinned &&
       message.author.id === client.user.id &&
@@ -361,12 +409,14 @@ async function cleanupUser(channel, userId) {
   return deleted;
 }
 
-// ===============================
+// ==================================================
 // BOT READY
-// ===============================
+// ==================================================
 
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
+  console.log(
+    `Logged in as ${client.user.tag}`
+  );
 
   const channel = await client.channels
     .fetch(FOOD_CHANNEL_ID)
@@ -382,23 +432,23 @@ client.once("ready", async () => {
   await ensureReminder(channel);
 });
 
-// ===============================
+// ==================================================
 // MESSAGE HANDLER
-// ===============================
+// ==================================================
 
 client.on("messageCreate", async (message) => {
   try {
-    // Ignore bots
+    // Ignore bots.
     if (message.author.bot) return;
 
-    // Only work inside the food channel
+    // Only process the Foodie channel.
     if (message.channel.id !== FOOD_CHANNEL_ID) {
       return;
     }
 
-    // ===========================
+    // ==================================================
     // CLEANUP COMMAND
-    // ===========================
+    // ==================================================
 
     if (
       message.content
@@ -444,41 +494,68 @@ client.on("messageCreate", async (message) => {
       return;
     }
 
-    // ===========================
-    // EXACT TRIGGER ONLY
-    // ===========================
+    // ==================================================
+    // EXACT TRIGGER
+    // ==================================================
 
-    if (!hasExactTrigger(message.content)) {
+    const hasTrigger =
+      hasExactTrigger(message.content);
+
+    // Anything without the exact trigger is untouched.
+    //
+    // This means:
+    // - normal chat = untouched
+    // - emoji = untouched
+    // - server emoji = untouched
+    // - Nitro emoji = untouched
+    // - picture only = untouched
+    // - video only = untouched
+
+    if (!hasTrigger) {
       return;
     }
 
-    // ===========================
-    // FIND IMAGE
-    // ===========================
+    // ==================================================
+    // TRIGGER WITHOUT MEDIA
+    // ==================================================
+
+    if (!hasMedia(message)) {
+      await safeDelete(message);
+
+      await sendPrivateDM(
+        message.author,
+        "❌ Please include a food or drink picture/video with **Kain Po Tayo Team Ryzza**."
+      );
+
+      return;
+    }
+
+    // ==================================================
+    // GET IMAGE
+    // ==================================================
 
     const imageAttachment =
-      message.attachments.find(isImage);
+      getImageAttachment(message);
+
+    // Current AI food checking uses images.
+    // Videos are detected, but are not sent to the
+    // image AI because the Responses image input expects
+    // an image rather than a raw video attachment.
 
     if (!imageAttachment) {
       await safeDelete(message);
 
-      try {
-        await message.author.send(
-          "❌ Please include a food or drink picture with **Kain Po Tayo Team Ryzza**."
-        );
-      } catch (error) {
-        console.error(
-          "Could not DM user:",
-          error.message
-        );
-      }
+      await sendPrivateDM(
+        message.author,
+        "❌ Please send a picture with **Kain Po Tayo Team Ryzza** so I can check the food."
+      );
 
       return;
     }
 
-    // ===========================
-    // DOWNLOAD FIRST
-    // ===========================
+    // ==================================================
+    // DOWNLOAD BEFORE DELETE
+    // ==================================================
 
     let imageBuffer;
 
@@ -492,63 +569,50 @@ client.on("messageCreate", async (message) => {
         error.message
       );
 
-      try {
-        await message.author.send(
-          "❌ I couldn't process that picture. Please try again."
-        );
-      } catch {}
+      await sendPrivateDM(
+        message.author,
+        "❌ I couldn't process that picture. Please try again."
+      );
 
       return;
     }
 
-    // ===========================
+    // ==================================================
     // PRIVATE CHECKING MESSAGE
-    // ===========================
+    // ==================================================
 
-    try {
-      await message.author.send(
-        "🔎 Checking your food picture..."
-      );
-    } catch (error) {
-      console.error(
-        "Could not send checking DM:",
-        error.message
-      );
-    }
+    await sendPrivateDM(
+      message.author,
+      "🔎 Checking your food picture..."
+    );
 
-    // Delete original submission
+    // Delete original submission.
     await safeDelete(message);
 
-    // ===========================
+    // ==================================================
     // AI CHECK
-    // ===========================
+    // ==================================================
 
     const isFood = await checkIfFood(
       imageAttachment.url
     );
 
-    // ===========================
+    // ==================================================
     // REJECT
-    // ===========================
+    // ==================================================
 
     if (!isFood) {
-      try {
-        await message.author.send(
-          "❌ No food or drink was confirmed in the picture, so it wasn't posted."
-        );
-      } catch (error) {
-        console.error(
-          "Could not send rejection DM:",
-          error.message
-        );
-      }
+      await sendPrivateDM(
+        message.author,
+        "❌ No food or drink was confirmed in the picture, so it wasn't posted."
+      );
 
       return;
     }
 
-    // ===========================
-    // APPROVED POST
-    // ===========================
+    // ==================================================
+    // APPROVED PUBLIC POST
+    // ==================================================
 
     const emoji = getFoodEmoji();
 
@@ -558,6 +622,14 @@ client.on("messageCreate", async (message) => {
           imageAttachment.name ||
           "food-picture.jpg"
       });
+
+    // The public channel only receives:
+    //
+    // Kain Po Tayo Team Ryzza + emoji
+    // 👤 @Sender
+    // Picture
+    //
+    // No extra AI text.
 
     const post =
       `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${emoji}**\n` +
@@ -582,8 +654,8 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// ===============================
+// ==================================================
 // LOGIN
-// ===============================
+// ==================================================
 
 client.login(DISCORD_TOKEN);
