@@ -1,24 +1,37 @@
 const express = require("express");
+const OpenAI = require("openai");
 const {
   Client,
   GatewayIntentBits,
-  MessageFlags,
+  EmbedBuilder,
+  PermissionsBitField
 } = require("discord.js");
-const OpenAI = require("openai");
 
-// ==========================================
+// ==================================================
 // CONFIG
-// ==========================================
+// ==================================================
 
 const PORT = process.env.PORT || 10000;
-const FOOD_CHANNEL_ID = "1550189625954402314";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ==========================================
-// ENVIRONMENT
-// ==========================================
+// Food channel
+const FOOD_CHANNEL_ID = "1550189625954402314";
+
+// Exact trigger
+const TRIGGER = "kain po tayo team ryzza";
+
+// AI model
+const AI_MODEL = "gpt-5.6-luna";
+
+// Target AI checking time
+// 1 second is the target, but actual API/network time can vary.
+const AI_TIMEOUT_MS = 1000;
+
+// ==================================================
+// CHECK ENVIRONMENT VARIABLES
+// ==================================================
 
 if (!DISCORD_TOKEN) {
   console.error("❌ DISCORD_TOKEN is missing.");
@@ -30,55 +43,17 @@ if (!OPENAI_API_KEY) {
   process.exit(1);
 }
 
-// ==========================================
-// HEALTH SERVER
-// ==========================================
-
-const app = express();
-
-app.get("/", (req, res) => {
-  res.send("Kain Po Tayo Team Ryzza Bot is online!");
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Health server running on port ${PORT}`);
-});
-
-// ==========================================
+// ==================================================
 // OPENAI
-// ==========================================
+// ==================================================
 
 const openai = new OpenAI({
-  apiKey: OPENAI_API_KEY,
+  apiKey: OPENAI_API_KEY
 });
 
-// ==========================================
-// DISCORD
-// ==========================================
-
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-});
-
-// ==========================================
-// ONLY TRIGGER
-// ==========================================
-
-const TRIGGER = "kain";
-
-function hasTrigger(message) {
-  return message.content
-    .toLowerCase()
-    .includes(TRIGGER);
-}
-
-// ==========================================
-// FOOD EMOJI SET
-// ==========================================
+// ==================================================
+// FOOD EMOJIS
+// ==================================================
 
 const FOOD_EMOJIS = [
   "🍞", "🥖", "🥐", "🍳", "🥚", "🧀", "🥨", "🫓",
@@ -97,539 +72,632 @@ function getFoodEmoji() {
   ];
 }
 
-// ==========================================
-// ATTACHMENT TYPES
-// ==========================================
+// ==================================================
+// EXPRESS HEALTH SERVER
+// ==================================================
+
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("Kain Po Tayo Team Ryzza Bot is online!");
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🌐 Health server running on port ${PORT}`);
+});
+
+// ==================================================
+// DISCORD CLIENT
+// ==================================================
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent
+  ]
+});
+
+// ==================================================
+// HELPERS
+// ==================================================
+
+function hasExactTrigger(content) {
+  return content.trim().toLowerCase() === TRIGGER;
+}
 
 function isImage(attachment) {
-  const type = attachment.contentType || "";
-  const name = attachment.name || "";
-
-  return (
-    type.startsWith("image/") ||
-    /\.(jpg|jpeg|png|webp|gif)$/i.test(name)
-  );
+  return attachment.contentType?.startsWith("image/");
 }
 
 function isVideo(attachment) {
-  const type = attachment.contentType || "";
-  const name = attachment.name || "";
-
-  return (
-    type.startsWith("video/") ||
-    /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(name)
-  );
+  return attachment.contentType?.startsWith("video/");
 }
 
-function isAudio(attachment) {
-  const type = attachment.contentType || "";
-  const name = attachment.name || "";
-
-  return (
-    type.startsWith("audio/") ||
-    /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(name)
-  );
+function safeUserMention(userId) {
+  return `<@${userId}>`;
 }
 
-function isVoiceMessage(message) {
+async function safeDelete(message) {
   try {
-    if (
-      typeof MessageFlags !== "undefined" &&
-      MessageFlags.IsVoiceMessage !== undefined &&
-      message.flags?.has(MessageFlags.IsVoiceMessage)
-    ) {
-      return true;
+    if (message?.deletable) {
+      await message.delete();
     }
-  } catch {
-    // Use attachment fallback below.
+  } catch (error) {
+    console.log("Delete skipped:", error.message);
   }
-
-  for (const attachment of message.attachments.values()) {
-    if (
-      attachment.duration_secs !== undefined ||
-      attachment.waveform !== undefined
-    ) {
-      return true;
-    }
-  }
-
-  return false;
 }
 
-function getFoodMedia(message) {
-  return [...message.attachments.values()].filter(
-    (attachment) =>
-      isImage(attachment) || isVideo(attachment)
-  );
+// ==================================================
+// DOWNLOAD ATTACHMENT
+// ==================================================
+
+async function downloadAttachment(attachment) {
+  try {
+    const response = await fetch(attachment.url);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    return {
+      attachment: Buffer.from(arrayBuffer),
+      name: attachment.name || "food-image"
+    };
+  } catch (error) {
+    console.error(
+      `Download failed for ${attachment.name || "attachment"}:`,
+      error.message
+    );
+
+    return null;
+  }
 }
 
-// ==========================================
+// ==================================================
 // AI FOOD CHECK
-// ==========================================
+// ==================================================
 
-async function isFood(mediaUrl, video = false) {
+async function checkIfFood(imageUrl) {
+  const aiRequest = openai.responses.create({
+    model: AI_MODEL,
+
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text:
+              "Look at this image. Reply with ONLY FOOD if the image clearly shows food or a food/drink item. Reply with ONLY NOT_FOOD if it does not."
+          },
+          {
+            type: "input_image",
+            image_url: imageUrl
+          }
+        ]
+      }
+    ],
+
+    max_output_tokens: 10
+  });
+
+  const timeout = new Promise((_, reject) => {
+    setTimeout(() => {
+      reject(new Error("AI check timeout"));
+    }, AI_TIMEOUT_MS);
+  });
+
   try {
-    const prompt = video
-      ? `
-Check this media for a food channel.
+    const response = await Promise.race([
+      aiRequest,
+      timeout
+    ]);
 
-Does the media clearly show food or a meal?
-
-Reply with ONLY:
-YES
-or
-NO
-`
-      : `
-Check this image for a food channel.
-
-Does the image clearly show food or a meal?
-
-Reply with ONLY:
-YES
-or
-NO
-`;
-
-    const response = await openai.responses.create({
-      model: "gpt-5.6-luna",
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: prompt,
-            },
-            {
-              type: "input_image",
-              image_url: mediaUrl,
-            },
-          ],
-        },
-      ],
-    });
-
-    const answer = response.output_text
-      .trim()
+    const result = response.output_text
+      ?.trim()
       .toUpperCase();
 
-    console.log(`🤖 AI: ${answer}`);
-
-    return answer.includes("YES");
+    return result === "FOOD";
   } catch (error) {
-    console.error("❌ AI check failed:", error.message);
+    console.log("AI check failed/timeout:", error.message);
+
+    // Fail closed:
+    // If AI cannot verify it quickly, don't publish it.
     return false;
   }
 }
 
-// ==========================================
+// ==================================================
 // PRIVATE DM
-// ==========================================
+// ==================================================
 
-async function sendDM(user, text) {
+async function sendPrivateMessage(user, text) {
   try {
     await user.send(text);
   } catch (error) {
     console.log(
-      `⚠️ Could not DM ${user.tag}: ${error.message}`
-    );
-  }
-}
-
-// ==========================================
-// SAFE DELETE
-// ==========================================
-
-async function safeDelete(message) {
-  try {
-    if (!message.deletable) {
-      return false;
-    }
-
-    await message.delete();
-    return true;
-  } catch (error) {
-    console.error(
-      `❌ Delete failed for ${message.id}:`,
+      `Could not DM ${user.tag}:`,
       error.message
     );
-
-    return false;
   }
 }
 
-// ==========================================
+// ==================================================
 // FOOD REMINDER
-// ==========================================
+// ==================================================
 
-function isFoodReminder(message) {
-  if (!message.pinned) return false;
-  if (!message.author?.bot) return false;
-  if (!message.embeds?.length) return false;
-
-  return message.embeds.some(
-    (embed) => embed.title === "🍽️ Foodie Reminder"
-  );
-}
-
-async function ensureFoodReminder(channel) {
+async function ensureReminder(channel) {
   try {
-    const messages = await channel.messages.fetch({
-      limit: 100,
+    // Look through recent messages first.
+    // This prevents another reminder from being created
+    // even if an older reminder was not pinned.
+    const recentMessages = await channel.messages.fetch({
+      limit: 100
     });
 
-    const existing = messages.find(
-      (message) => isFoodReminder(message)
+    const existingReminder = recentMessages.find(message =>
+      message.author.id === client.user.id &&
+      message.embeds.some(
+        embed => embed.title === "🍽️ Foodie Reminder"
+      )
     );
 
-    if (existing) {
-      console.log("📌 Foodie Reminder already exists.");
+    if (existingReminder) {
+      // If the existing reminder is not pinned, pin it.
+      if (!existingReminder.pinned) {
+        try {
+          await existingReminder.pin();
+        } catch (error) {
+          console.log(
+            "Could not pin existing reminder:",
+            error.message
+          );
+        }
+      }
+
+      console.log("✅ Existing Foodie Reminder found.");
       return;
     }
 
-    const reminder = await channel.send({
-      embeds: [
-        {
-          title: "🍽️ Foodie Reminder",
-          description:
-            "Post your food here with **kain** + a picture, GIF, or video.",
-        },
-      ],
+    // Create only if one does not already exist.
+    const reminder = new EmbedBuilder()
+      .setTitle("🍽️ Foodie Reminder")
+      .setDescription(
+        "Post your food here with **Kain Po Tayo Team Ryzza** + a picture."
+      );
+
+    const reminderMessage = await channel.send({
+      embeds: [reminder]
     });
 
-    await reminder.pin().catch(() => {});
+    await reminderMessage.pin();
 
     console.log("📌 Foodie Reminder created and pinned.");
   } catch (error) {
     console.error(
-      "❌ Foodie Reminder error:",
+      "Reminder error:",
       error.message
     );
   }
 }
 
-// ==========================================
+// ==================================================
+// READY
+// ==================================================
+
+client.once("ready", async () => {
+  console.log("====================================");
+  console.log(`🤖 Logged in as ${client.user.tag}`);
+  console.log(`📢 Food channel: ${FOOD_CHANNEL_ID}`);
+  console.log(`🔑 Trigger: ${TRIGGER}`);
+  console.log(`🧠 AI model: ${AI_MODEL}`);
+  console.log(`⏱️ AI target: ${AI_TIMEOUT_MS}ms`);
+  console.log("====================================");
+
+  try {
+    const channel = await client.channels.fetch(
+      FOOD_CHANNEL_ID
+    );
+
+    if (!channel || !channel.isTextBased()) {
+      console.error("❌ Food channel not found.");
+      return;
+    }
+
+    await ensureReminder(channel);
+  } catch (error) {
+    console.error(
+      "Startup channel error:",
+      error.message
+    );
+  }
+});
+
+// ==================================================
 // CLEANUP
-// ==========================================
+// ==================================================
 
-async function cleanup(channel, commandId) {
-  console.log("🧹 Starting cleanup...");
-
-  let scanned = 0;
-  let deleted = 0;
-  let kept = 0;
-  let failed = 0;
-
-  let before;
+async function cleanupChannel(channel) {
+  let deletedCount = 0;
+  let lastId = null;
 
   while (true) {
     const options = {
-      limit: 100,
+      limit: 100
     };
 
-    if (before) {
-      options.before = before;
+    if (lastId) {
+      options.before = lastId;
     }
 
-    let messages;
-
-    try {
-      messages = await channel.messages.fetch(options);
-    } catch (error) {
-      console.error(
-        "❌ Could not fetch messages:",
-        error.message
-      );
-      break;
-    }
+    const messages = await channel.messages.fetch(options);
 
     if (messages.size === 0) {
       break;
     }
 
+    const twoWeeksAgo =
+      Date.now() - 14 * 24 * 60 * 60 * 1000;
+
     for (const message of messages.values()) {
-      scanned++;
+      // NEVER delete the pinned Foodie Reminder.
+      const isReminder =
+        message.author.id === client.user.id &&
+        message.embeds.some(
+          embed => embed.title === "🍽️ Foodie Reminder"
+        ) &&
+        message.pinned;
 
-      // Don't process the cleanup command itself.
-      if (message.id === commandId) {
+      if (isReminder) {
         continue;
       }
 
-      // Keep the current pinned Foodie Reminder.
-      if (isFoodReminder(message)) {
-        kept++;
+      if (!message.deletable) {
         continue;
       }
 
-      // IMPORTANT:
-      // Old bot messages are also deleted.
-      if (await safeDelete(message)) {
-        deleted++;
-      } else {
-        failed++;
+      try {
+        if (message.createdTimestamp > twoWeeksAgo) {
+          await message.delete();
+          deletedCount++;
+        } else {
+          await message.delete();
+          deletedCount++;
+        }
+      } catch (error) {
+        console.log(
+          "Cleanup skipped message:",
+          error.message
+        );
       }
     }
 
-    before = messages.last().id;
+    lastId = messages.last().id;
 
     if (messages.size < 100) {
       break;
     }
   }
 
-  console.log(
-    `🧹 Cleanup complete | Scanned ${scanned} | Deleted ${deleted} | Kept ${kept} | Failed ${failed}`
-  );
-
-  return {
-    scanned,
-    deleted,
-    kept,
-    failed,
-  };
+  return deletedCount;
 }
 
-// ==========================================
-// READY
-// ==========================================
+// ==================================================
+// CLEANUP USER
+// ==================================================
 
-client.once("clientReady", async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  console.log("🍽️ Kain Po Tayo Team Ryzza Bot is online!");
+async function cleanupUser(channel, userId) {
+  let deletedCount = 0;
+  let lastId = null;
 
-  const channel = await client.channels
-    .fetch(FOOD_CHANNEL_ID)
-    .catch(() => null);
+  while (true) {
+    const options = {
+      limit: 100
+    };
 
-  if (!channel) {
-    console.error(
-      `❌ Food channel ${FOOD_CHANNEL_ID} not found.`
-    );
-    return;
-  }
-
-  console.log(`🍽️ Food channel: #${channel.name}`);
-
-  await ensureFoodReminder(channel);
-});
-
-// ==========================================
-// MESSAGE HANDLER
-// ==========================================
-
-client.on("messageCreate", async (message) => {
-  try {
-    // Ignore all bots during normal live processing.
-    if (message.author.bot) {
-      return;
+    if (lastId) {
+      options.before = lastId;
     }
 
-    // Only food channel.
+    const messages = await channel.messages.fetch(options);
+
+    if (messages.size === 0) {
+      break;
+    }
+
+    for (const message of messages.values()) {
+      // Never delete the pinned reminder.
+      const isReminder =
+        message.author.id === client.user.id &&
+        message.embeds.some(
+          embed => embed.title === "🍽️ Foodie Reminder"
+        ) &&
+        message.pinned;
+
+      if (isReminder) {
+        continue;
+      }
+
+      if (message.author.id !== userId) {
+        continue;
+      }
+
+      if (!message.deletable) {
+        continue;
+      }
+
+      try {
+        await message.delete();
+        deletedCount++;
+      } catch (error) {
+        console.log(
+          "User cleanup skipped message:",
+          error.message
+        );
+      }
+    }
+
+    lastId = messages.last().id;
+
+    if (messages.size < 100) {
+      break;
+    }
+  }
+
+  return deletedCount;
+}
+
+// ==================================================
+// MESSAGE HANDLER
+// ==================================================
+
+client.on("messageCreate", async message => {
+  try {
+    // Ignore DMs.
+    if (!message.guild) return;
+
+    // Only work in the food channel.
     if (message.channel.id !== FOOD_CHANNEL_ID) {
       return;
     }
 
-    // ========================================
+    // Ignore other bots.
+    if (message.author.bot) {
+      return;
+    }
+
+    // ==================================================
     // !CLEANUP
-    // ========================================
+    // ==================================================
 
     if (
-      message.content.trim().toLowerCase() === "!cleanup"
+      message.content
+        .trim()
+        .toLowerCase()
+        .startsWith("!cleanup")
     ) {
-      const result = await cleanup(
-        message.channel,
-        message.id
-      );
-
-      await safeDelete(message);
-
-      const summary = await message.channel.send(
-        `🧹 **Cleanup complete!**\n` +
-        `Scanned: **${result.scanned}**\n` +
-        `Deleted: **${result.deleted}**\n` +
-        `Kept reminder: **${result.kept}**\n` +
-        `Failed: **${result.failed}**`
-      );
-
-      setTimeout(() => {
-        safeDelete(summary).catch(() => {});
-      }, 15000);
-
-      return;
-    }
-
-    // ========================================
-    // VOICE
-    // ========================================
-
-    if (isVoiceMessage(message)) {
-      await safeDelete(message);
-      return;
-    }
-
-    // ========================================
-    // STICKERS
-    // ========================================
-
-    if (message.stickers?.size > 0) {
-      await safeDelete(message);
-      return;
-    }
-
-    // ========================================
-    // AUDIO
-    // ========================================
-
-    const attachments = [
-      ...message.attachments.values(),
-    ];
-
-    if (attachments.some(isAudio)) {
-      await safeDelete(message);
-      return;
-    }
-
-    // ========================================
-    // FOOD MEDIA
-    // ========================================
-
-    const media = getFoodMedia(message);
-
-    // Text / emoji only.
-    if (media.length === 0) {
-      await safeDelete(message);
-      return;
-    }
-
-    // Media without "kain".
-    if (!hasTrigger(message)) {
-      await safeDelete(message);
-      return;
-    }
-
-    // ========================================
-    // AI CHECK
-    // ========================================
-
-    const sender = message.author;
-
-    // Remove public submission immediately.
-    await safeDelete(message);
-
-    // Private status.
-    await sendDM(
-      sender,
-      "🔎 Your food submission is being checked. Please wait..."
-    );
-
-    let approvedMedia = null;
-
-    for (const attachment of media) {
-      const video = isVideo(attachment);
-
+      // Permission check before deleting command.
       if (
-        await isFood(
-          attachment.url,
-          video
+        !message.member?.permissions.has(
+          PermissionsBitField.Flags.ManageMessages
         )
       ) {
-        approvedMedia = attachment;
-        break;
+        await safeDelete(message);
+
+        const denied =
+          await message.channel.send(
+            "❌ You need Manage Messages permission to use `!cleanup`."
+          );
+
+        setTimeout(() => {
+          safeDelete(denied);
+        }, 5000);
+
+        return;
       }
-    }
 
-    // ========================================
-    // REJECTED
-    // ========================================
+      const parts = message.content.trim().split(/\s+/);
 
-    if (!approvedMedia) {
-      await sendDM(
-        sender,
-        "❌ Your submission wasn't approved because the media was not identified as food."
+      // !cleanup @User
+      const mentionedUser =
+        message.mentions.users.first();
+
+      // Delete command.
+      await safeDelete(message);
+
+      // ==================================================
+      // SELECTED USER CLEANUP
+      // ==================================================
+
+      if (mentionedUser) {
+        console.log(
+          `🧹 Cleaning messages from ${mentionedUser.tag}...`
+        );
+
+        const count = await cleanupUser(
+          message.channel,
+          mentionedUser.id
+        );
+
+        const confirmation =
+          await message.channel.send(
+            `🧹 Cleanup complete for ${safeUserMention(
+              mentionedUser.id
+            )}. Removed ${count} message(s).`
+          );
+
+        setTimeout(() => {
+          safeDelete(confirmation);
+        }, 5000);
+
+        return;
+      }
+
+      // ==================================================
+      // FULL CLEANUP
+      // ==================================================
+
+      console.log("🧹 Starting full cleanup...");
+
+      const count = await cleanupChannel(
+        message.channel
       );
 
-      console.log(
-        `❌ Rejected food submission from ${sender.tag}`
+      const confirmation =
+        await message.channel.send(
+          `🧹 Cleanup complete. Removed ${count} message(s).`
+        );
+
+      setTimeout(() => {
+        safeDelete(confirmation);
+      }, 5000);
+
+      return;
+    }
+
+    // ==================================================
+    // NORMAL CHAT
+    // ==================================================
+
+    // Exact trigger only.
+    // Normal chatting never reaches AI.
+    if (!hasExactTrigger(message.content)) {
+      return;
+    }
+
+    // ==================================================
+    // TRIGGER WITHOUT IMAGE
+    // ==================================================
+
+    const attachments = [
+      ...message.attachments.values()
+    ];
+
+    const imageAttachment = attachments.find(
+      attachment => isImage(attachment)
+    );
+
+    // We require an image.
+    if (!imageAttachment) {
+      await safeDelete(message);
+
+      await sendPrivateMessage(
+        message.author,
+        "⚠️ Please send a food picture together with **Kain Po Tayo Team Ryzza**."
       );
 
       return;
     }
 
-    // ========================================
-    // APPROVED
-    // ========================================
+    // ==================================================
+    // DOWNLOAD IMAGE FIRST
+    // ==================================================
+
+    const downloaded = await downloadAttachment(
+      imageAttachment
+    );
+
+    if (!downloaded) {
+      await safeDelete(message);
+
+      await sendPrivateMessage(
+        message.author,
+        "⚠️ I couldn't process that picture. Please try again."
+      );
+
+      return;
+    }
+
+    // ==================================================
+    // PRIVATE CHECKING MESSAGE
+    // ==================================================
+
+    await sendPrivateMessage(
+      message.author,
+      "🔎 Checking your food picture..."
+    );
+
+    // ==================================================
+    // DELETE ORIGINAL
+    // ==================================================
+
+    await safeDelete(message);
+
+    // ==================================================
+    // AI FOOD CHECK
+    // ==================================================
+
+    const isFood = await checkIfFood(
+      imageAttachment.url
+    );
+
+    // ==================================================
+    // NOT FOOD
+    // ==================================================
+
+    if (!isFood) {
+      await sendPrivateMessage(
+        message.author,
+        "❌ This picture wasn't confirmed as food, so it wasn't posted."
+      );
+
+      return;
+    }
+
+    // ==================================================
+    // FOOD APPROVED
+    // ==================================================
 
     const emoji = getFoodEmoji();
 
-    const content =
+    const publicText =
       `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${emoji}**\n` +
-      `👤 ${sender}`;
+      `👤 ${safeUserMention(message.author.id)}`;
 
     try {
       await message.channel.send({
-        content,
+        content: publicText,
+
         files: [
           {
-            attachment: approvedMedia.url,
-          },
+            attachment: downloaded.attachment,
+            name: downloaded.name
+          }
         ],
+
         allowedMentions: {
-          users: [sender.id],
-        },
+          users: [message.author.id]
+        }
       });
 
-      await sendDM(
-        sender,
-        "✅ Your food submission was approved and posted!"
-      );
-
-      console.log(
-        `✅ Approved food submission from ${sender.tag}`
+      await sendPrivateMessage(
+        message.author,
+        "✅ Your food picture was posted!"
       );
     } catch (error) {
       console.error(
-        "❌ Could not publish approved food:",
+        "Failed to publish food:",
         error.message
       );
 
-      // Fallback if Discord cannot attach the deleted
-      // attachment URL again.
-      try {
-        await message.channel.send({
-          content:
-            `${content}\n${approvedMedia.url}`,
-          allowedMentions: {
-            users: [sender.id],
-          },
-        });
-
-        await sendDM(
-          sender,
-          "✅ Your food submission was approved and posted!"
-        );
-      } catch (fallbackError) {
-        console.error(
-          "❌ Fallback publish failed:",
-          fallbackError.message
-        );
-
-        await sendDM(
-          sender,
-          "⚠️ Your submission passed the food check, but I couldn't publish the media."
-        );
-      }
+      await sendPrivateMessage(
+        message.author,
+        "⚠️ The food check passed, but I couldn't publish the picture. Please try again."
+      );
     }
   } catch (error) {
     console.error(
-      "❌ Message handler error:",
+      "Message handler error:",
       error
     );
   }
 });
 
-// ==========================================
+// ==================================================
 // LOGIN
-// ==========================================
+// ==================================================
 
 client.login(DISCORD_TOKEN);
