@@ -1,3 +1,4 @@
+
 const express = require("express");
 const {
   Client,
@@ -63,214 +64,48 @@ const client = new Client({
 // SETTINGS
 // ======================================================
 
-// Main Kain Po Tayo Team Ryzza channel
 const FOOD_CHANNEL_ID = "1550189625954402314";
 
-// Exact trigger
 const FOOD_TRIGGER = "Kain Po Tayo Team Ryzza";
 
-// AI model
 const AI_MODEL = "gpt-5.6-luna";
 
-// Maximum AI wait time
 const AI_TIMEOUT_MS = 7000;
 
-// Main channel slowmode
+// Member slowmode
 const FOOD_SLOWMODE_SECONDS = 30;
 
-// One single public Party Chat
+// Bot waits 30 seconds AFTER AI approval
+const BOT_POST_DELAY_MS = 30000;
+
+// Party Chat
 const PARTY_THREAD_NAME = "💬 Kain Po Tayo — Party Chat";
 
 let partyThreadId = null;
 
 // ======================================================
-// ALLOWED FOOD EMOJIS
+// FOOD EMOJIS
 // ======================================================
 
 const FOOD_EMOJI_LIST = [
-  "🍞", // bread
-  "🥖", // baguette
-  "🥐", // croissant
-  "🍳", // cooked egg
-  "🥚", // egg
-  "🧀", // cheese
-  "🥨", // pretzel
-  "🫓", // flatbread
-  "🧈", // butter
-  "🥓", // bacon
-  "🥩", // steak
-  "🥞", // pancakes
-  "🧇", // waffle
-  "🍤", // shrimp
-  "🍗", // chicken
-  "🍖", // meat
-  "🍕", // pizza
-  "🌭", // hot dog
-  "🍟", // fries
-  "🥙", // stuffed flatbread
-  "🧆", // falafel
-  "🌮", // taco
-  "🌯", // burrito
-  "🫔", // tamale
-  "🥘", // pan of food
-  "🍝", // spaghetti / pasta
-  "🍜", // ramen / noodles
-  "🍲", // soup / stew
-  "🍥", // fish cake
-  "🥯", // bagel
-  "🥮", // mooncake
-  "🍣", // sushi
-  "🍱", // bento
-  "🍛", // curry
-  "🍚", // rice
-  "🍘", // rice cracker
-  "🥧", // pie
-  "🍦", // ice cream
-  "🍨", // ice cream
-  "🍧", // shaved ice
-  "🍡", // dango
-  "🍢", // oden
-  "🥠", // fortune cookie
-  "🧁", // cupcake
-  "🍰", // cake
-  "🎂", // birthday cake
-  "🍮", // pudding
-  "🍭", // lollipop
-  "🍬", // candy
-  "🍫", // chocolate
-  "🥛", // milk
-  "🍯", // honey
-  "🍪", // cookie
-  "🦪", // oyster
-  "🥟", // dumpling
-  "🍩", // donut
-  "🍿", // popcorn
-  "☕", // coffee
-  "🍵", // tea
-  "🧋", // bubble tea
-  "🥤", // soft drink
-  "🧃"  // juice
+  "🍞", "🥖", "🥐", "🍳", "🥚", "🧀", "🥨", "🫓",
+  "🧈", "🥓", "🥩", "🥞", "🧇", "🍤", "🍗", "🍖",
+  "🍕", "🌭", "🍟", "🥙", "🧆", "🌮", "🌯", "🫔",
+  "🥘", "🍝", "🍜", "🍲", "🍥", "🥯", "🥮", "🍣",
+  "🍱", "🍛", "🍚", "🍘", "🥧", "🍦", "🍨", "🍧",
+  "🍡", "🍢", "🥠", "🧁", "🍰", "🎂", "🍮", "🍭",
+  "🍬", "🍫", "🥛", "🍯", "🍪", "🦪", "🥟", "🍩",
+  "🍿", "☕", "🍵", "🧋", "🥤", "🧃"
 ];
 
 // ======================================================
-// AI FOOD + EMOJI DETECTION
+// WAIT
 // ======================================================
 
-async function checkFoodWithAI(buffer, contentType) {
-  const base64 = buffer.toString("base64");
-
-  const prompt = `
-You are the food detector for a Discord food channel.
-
-Look carefully at the entire image.
-
-Your job:
-
-1. Decide whether ANY clearly visible food or drink exists anywhere in the image.
-2. People, pets, tables, restaurants, plates, backgrounds, packaging, or other objects do NOT make the image invalid.
-3. If clearly visible food or drink exists, the result is YES.
-4. If there is no clearly visible food or drink, the result is NO.
-5. If YES, identify the MAIN clearly visible food or drink.
-6. Select EXACTLY ONE emoji from this allowed list:
-
-${FOOD_EMOJI_LIST.join(" ")}
-
-Return ONLY valid JSON in exactly this format:
-
-{
-  "food": true,
-  "emoji": "🍝"
-}
-
-or
-
-{
-  "food": false,
-  "emoji": null
-}
-
-Do not include markdown.
-Do not include explanations.
-Do not use an emoji outside the allowed list.
-`;
-
-  const result = await Promise.race([
-    openai.responses.create({
-      model: AI_MODEL,
-
-      input: [
-        {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text: prompt
-            }
-          ]
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Analyze this food picture."
-            },
-            {
-              type: "input_image",
-              image_url: `data:${contentType};base64,${base64}`
-            }
-          ]
-        }
-      ]
-    }),
-
-    new Promise((resolve) => {
-      setTimeout(() => resolve(null), AI_TIMEOUT_MS);
-    })
-  ]);
-
-  // Do NOT treat timeout as "not food".
-  if (!result) {
-    return null;
-  }
-
-  const raw = result.output_text?.trim() || "";
-
-  try {
-    const parsed = JSON.parse(raw);
-
-    if (parsed.food !== true) {
-      return {
-        food: false,
-        emoji: null
-      };
-    }
-
-    // Only accept an emoji from our approved list.
-    if (!FOOD_EMOJI_LIST.includes(parsed.emoji)) {
-      console.log(
-        `⚠️ AI returned unsupported emoji: ${parsed.emoji}`
-      );
-
-      // Safe fallback based on food approval.
-      return {
-        food: true,
-        emoji: "🍽️"
-      };
-    }
-
-    return {
-      food: true,
-      emoji: parsed.emoji
-    };
-  } catch (error) {
-    console.error(
-      "❌ Could not parse AI response:",
-      raw
-    );
-
-    return null;
-  }
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 // ======================================================
@@ -306,10 +141,170 @@ async function sendPrivateDM(user, text) {
 }
 
 // ======================================================
+// AI FOOD + EMOJI DETECTION
+// ======================================================
+
+async function checkFoodWithAI(buffer, contentType) {
+  const base64 = buffer.toString("base64");
+
+  const prompt = `
+You are the food detector for a Discord food channel.
+
+Look carefully at the entire image.
+
+Determine:
+
+1. Is ANY clearly visible food or drink present?
+2. If yes, identify the main food or drink.
+3. Choose exactly ONE matching emoji from the allowed list.
+
+People, pets, tables, restaurants, plates, packaging,
+and backgrounds do NOT make the image invalid.
+
+If clearly visible food or drink exists, food must be true.
+
+Allowed emojis:
+
+${FOOD_EMOJI_LIST.join(" ")}
+
+Examples:
+
+Spaghetti or pasta = 🍝
+Pizza = 🍕
+Burger = 🍔
+French fries = 🍟
+Ramen/noodles = 🍜
+Sushi = 🍣
+Rice = 🍚
+Curry = 🍛
+Cake = 🍰
+Cupcake = 🧁
+Donut = 🍩
+Ice cream = 🍦
+Coffee = ☕
+Tea = 🍵
+Milk tea/boba = 🧋
+Juice = 🧃
+Soft drink = 🥤
+Chicken = 🍗
+Steak/beef = 🥩
+Bacon = 🥓
+Egg = 🥚
+Shrimp = 🍤
+Dumpling = 🥟
+Taco = 🌮
+Burrito = 🌯
+Hot dog = 🌭
+Popcorn = 🍿
+Bread = 🍞
+Croissant = 🥐
+Pancakes = 🥞
+Waffle = 🧇
+Cheese = 🧀
+
+Return ONLY JSON.
+
+For food:
+
+{
+  "food": true,
+  "emoji": "🍝"
+}
+
+For no food:
+
+{
+  "food": false,
+  "emoji": null
+}
+
+Do not include explanations.
+Do not use markdown.
+Do not use an emoji outside the allowed list.
+`;
+
+  const result = await Promise.race([
+    openai.responses.create({
+      model: AI_MODEL,
+
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text: prompt
+            }
+          ]
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "Analyze this food picture."
+            },
+            {
+              type: "input_image",
+              image_url:
+                `data:${contentType};base64,${base64}`
+            }
+          ]
+        }
+      ]
+    }),
+
+    new Promise((resolve) => {
+      setTimeout(() => resolve(null), AI_TIMEOUT_MS);
+    })
+  ]);
+
+  if (!result) {
+    return null;
+  }
+
+  const raw =
+    result.output_text?.trim() || "";
+
+  try {
+    const parsed = JSON.parse(raw);
+
+    if (parsed.food !== true) {
+      return {
+        food: false,
+        emoji: null
+      };
+    }
+
+    if (!FOOD_EMOJI_LIST.includes(parsed.emoji)) {
+      console.log(
+        `⚠️ Unsupported AI emoji: ${parsed.emoji}`
+      );
+
+      return {
+        food: true,
+        emoji: "🍽️"
+      };
+    }
+
+    return {
+      food: true,
+      emoji: parsed.emoji
+    };
+  } catch (error) {
+    console.error(
+      "❌ Could not parse AI response:",
+      raw
+    );
+
+    return null;
+  }
+}
+
+// ======================================================
 // FOOD QUEUE
 // ======================================================
 
-// Only ONE submission is processed at a time.
 const foodQueue = [];
 let processingFood = false;
 
@@ -317,15 +312,20 @@ function addToFoodQueue(job) {
   foodQueue.push(job);
 
   console.log(
-    `📥 Food submission queued. Queue size: ${foodQueue.length}`
+    `📥 Food submission queued. Queue: ${foodQueue.length}`
   );
 
   processFoodQueue();
 }
 
 async function processFoodQueue() {
-  if (processingFood) return;
-  if (foodQueue.length === 0) return;
+  if (processingFood) {
+    return;
+  }
+
+  if (foodQueue.length === 0) {
+    return;
+  }
 
   processingFood = true;
 
@@ -347,12 +347,11 @@ async function processFoodQueue() {
 
   processingFood = false;
 
-  // Process the next submission.
   setImmediate(processFoodQueue);
 }
 
 // ======================================================
-// PROCESS FOOD SUBMISSION
+// PROCESS FOOD
 // ======================================================
 
 async function processFoodSubmission({
@@ -364,15 +363,16 @@ async function processFoodSubmission({
     `🔎 Checking food picture from ${user.tag}`
   );
 
-  const result = await checkFoodWithAI(
-    buffer,
-    contentType
-  );
+  const result =
+    await checkFoodWithAI(
+      buffer,
+      contentType
+    );
 
-  // AI timeout/error
+  // AI failed
   if (result === null) {
     console.log(
-      `⚠️ AI check did not finish for ${user.tag}`
+      `⚠️ AI check failed for ${user.tag}`
     );
 
     await sendPrivateDM(
@@ -383,10 +383,7 @@ async function processFoodSubmission({
     return;
   }
 
-  // ====================================================
-  // NO FOOD
-  // ====================================================
-
+  // No food
   if (!result.food) {
     console.log(
       `❌ No food detected for ${user.tag}`
@@ -400,13 +397,34 @@ async function processFoodSubmission({
     return;
   }
 
+  // Food approved
+  console.log(
+    `✅ Food detected: ${result.emoji}`
+  );
+
+  await sendPrivateDM(
+    user,
+    `✅ Your food was confirmed ${result.emoji}. The bot will post it shortly.`
+  );
+
   // ====================================================
-  // FOOD APPROVED
+  // BOT 30 SECOND DELAY
   // ====================================================
 
-  const channel = await client.channels.fetch(
-    FOOD_CHANNEL_ID
+  console.log(
+    `⏳ Waiting 30 seconds before posting for ${user.tag}.`
   );
+
+  await wait(BOT_POST_DELAY_MS);
+
+  // ====================================================
+  // FETCH FOOD CHANNEL
+  // ====================================================
+
+  const channel =
+    await client.channels.fetch(
+      FOOD_CHANNEL_ID
+    );
 
   if (!channel || !channel.isTextBased()) {
     throw new Error(
@@ -414,15 +432,12 @@ async function processFoodSubmission({
     );
   }
 
-  const emoji = result.emoji;
+  // ====================================================
+  // FINAL FOOD POST
+  // ====================================================
 
-  console.log(
-    `✅ Food detected for ${user.tag} — Emoji: ${emoji}`
-  );
-
-  // Exact public post format
   const messageContent =
-    `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${emoji}**\n` +
+    `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${result.emoji}**\n` +
     `👤 <@${user.id}>`;
 
   await channel.send({
@@ -441,7 +456,7 @@ async function processFoodSubmission({
   });
 
   console.log(
-    `🍽️ Approved food post sent for ${user.tag}`
+    `🍽️ Food post sent for ${user.tag}`
   );
 
   // ====================================================
@@ -475,10 +490,7 @@ async function processFoodSubmission({
 // ======================================================
 
 async function ensurePartyThread(channel) {
-  // ----------------------------------------------------
   // Cached thread
-  // ----------------------------------------------------
-
   if (partyThreadId) {
     try {
       const cachedThread =
@@ -501,10 +513,7 @@ async function ensurePartyThread(channel) {
     }
   }
 
-  // ----------------------------------------------------
   // Active threads
-  // ----------------------------------------------------
-
   try {
     const activeThreads =
       await channel.threads.fetchActive();
@@ -517,7 +526,6 @@ async function ensurePartyThread(channel) {
 
     if (existing) {
       partyThreadId = existing.id;
-
       return existing;
     }
   } catch (error) {
@@ -527,10 +535,7 @@ async function ensurePartyThread(channel) {
     );
   }
 
-  // ----------------------------------------------------
-  // Archived public threads
-  // ----------------------------------------------------
-
+  // Archived threads
   try {
     const archived =
       await channel.threads.fetchArchived({
@@ -557,10 +562,7 @@ async function ensurePartyThread(channel) {
     );
   }
 
-  // ----------------------------------------------------
-  // Create Party Chat
-  // ----------------------------------------------------
-
+  // Create new Party Chat
   try {
     const thread =
       await channel.threads.create({
@@ -609,7 +611,8 @@ async function ensureReminder(channel) {
           message.author.id === client.user.id &&
           message.embeds.some(
             (embed) =>
-              embed.title === "🍽️ Foodie Reminder"
+              embed.title ===
+              "🍽️ Foodie Reminder"
           )
       );
 
@@ -658,61 +661,167 @@ async function ensureReminder(channel) {
 }
 
 // ======================================================
-// CLEANUP
+// CHECK FOODIE REMINDER
 // ======================================================
 
-async function cleanupChannel(message) {
-  const channel = message.channel;
+function isFoodieReminder(message) {
+  return (
+    message.author.id === client.user.id &&
+    message.embeds.some(
+      (embed) =>
+        embed.title ===
+        "🍽️ Foodie Reminder"
+    )
+  );
+}
+
+// ======================================================
+// DOES BOT MESSAGE BELONG TO USER?
+// ======================================================
+
+function botMessageMentionsUser(message, userId) {
+  // Direct Discord mention
+  if (message.mentions.users.has(userId)) {
+    return true;
+  }
+
+  // Extra safety: check message text for
+  // the exact Discord mention format.
+  if (
+    message.content.includes(`<@${userId}>`) ||
+    message.content.includes(`<@!${userId}>`)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+// ======================================================
+// CLEANUP
+// ======================================================
+//
+// !cleanup
+//      Deletes all messages in the main Foodie channel
+//      except the Foodie Reminder.
+//
+// !cleanup @User
+//      Deletes:
+//      - that user's own messages
+//      - bot messages that mention that user
+//
+// Party Chat is NEVER cleaned.
+// ======================================================
+
+async function cleanupChannel(commandMessage) {
+  const channel = commandMessage.channel;
 
   const mentionedUser =
-    message.mentions.users.first();
+    commandMessage.mentions.users.first();
 
   let deletedCount = 0;
+  let scannedCount = 0;
+
+  let beforeId = null;
 
   try {
-    const messages =
-      await channel.messages.fetch({
+    while (true) {
+      const options = {
         limit: 100
-      });
+      };
 
-    for (const msg of messages.values()) {
-      // Never delete the Foodie Reminder.
-      const isReminder =
-        msg.author.id === client.user.id &&
-        msg.embeds.some(
-          (embed) =>
-            embed.title === "🍽️ Foodie Reminder"
-        );
-
-      if (isReminder) {
-        continue;
+      if (beforeId) {
+        options.before = beforeId;
       }
 
-      // Never delete bot-generated messages.
-      if (msg.author.bot) {
-        continue;
+      const messages =
+        await channel.messages.fetch(options);
+
+      if (messages.size === 0) {
+        break;
       }
 
-      // If a user was mentioned,
-      // only delete their messages.
-      if (
-        mentionedUser &&
-        msg.author.id !== mentionedUser.id
-      ) {
-        continue;
+      scannedCount += messages.size;
+
+      // Discord returns newest -> oldest.
+      // Save the oldest ID for the next page.
+      beforeId =
+        messages.last().id;
+
+      for (const msg of messages.values()) {
+        // ALWAYS preserve the Foodie Reminder.
+        if (isFoodieReminder(msg)) {
+          continue;
+        }
+
+        // ------------------------------------------------
+        // !cleanup @User
+        // ------------------------------------------------
+
+        if (mentionedUser) {
+          let shouldDelete = false;
+
+          // Delete the user's own message.
+          if (
+            msg.author.id ===
+            mentionedUser.id
+          ) {
+            shouldDelete = true;
+          }
+
+          // Also delete bot food posts that mention
+          // that user.
+          if (
+            msg.author.bot &&
+            botMessageMentionsUser(
+              msg,
+              mentionedUser.id
+            )
+          ) {
+            shouldDelete = true;
+          }
+
+          if (!shouldDelete) {
+            continue;
+          }
+        }
+
+        // ------------------------------------------------
+        // !cleanup with NO mention
+        // ------------------------------------------------
+        //
+        // Delete everything except the Reminder,
+        // including bot-generated food posts.
+        // ------------------------------------------------
+
+        try {
+          await msg.delete();
+          deletedCount++;
+        } catch (error) {
+          console.log(
+            `⚠️ Could not delete message ${msg.id}: ${error.message}`
+          );
+        }
       }
 
-      try {
-        await msg.delete();
-        deletedCount++;
-      } catch {
-        // Ignore messages that cannot be deleted.
+      // If fewer than 100 messages were returned,
+      // we've reached the end of the channel history.
+      if (messages.size < 100) {
+        break;
       }
     }
 
+    console.log(
+      `🧹 Cleanup scanned ${scannedCount} messages and deleted ${deletedCount}.`
+    );
+
+    const targetText = mentionedUser
+      ? ` for ${mentionedUser}`
+      : "";
+
     const confirmation =
       await channel.send(
-        `🧹 Cleanup complete. Deleted **${deletedCount}** message(s).`
+        `🧹 Cleanup complete${targetText}. Deleted **${deletedCount}** message(s).`
       );
 
     setTimeout(async () => {
@@ -725,97 +834,22 @@ async function cleanupChannel(message) {
   } catch (error) {
     console.error(
       "❌ Cleanup error:",
-      error.message
-    );
-  }
-}
-
-// ======================================================
-// BOT READY
-// ======================================================
-
-client.once("ready", async () => {
-  console.log(
-    `✅ Logged in as ${client.user.tag}`
-  );
-
-  try {
-    const channel =
-      await client.channels.fetch(
-        FOOD_CHANNEL_ID
-      );
-
-    if (!channel || !channel.isTextBased()) {
-      console.error(
-        "❌ Food channel is invalid."
-      );
-
-      return;
-    }
-
-    // --------------------------------------------------
-    // 30 SECOND SLOWMODE
-    // --------------------------------------------------
-
-    try {
-      await channel.setRateLimitPerUser(
-        FOOD_SLOWMODE_SECONDS,
-        "Kain Po Tayo Team Ryzza Foodie slowmode"
-      );
-
-      console.log(
-        `✅ Food channel slowmode: ${FOOD_SLOWMODE_SECONDS} seconds`
-      );
-    } catch (error) {
-      console.error(
-        "⚠️ Could not set slowmode:",
-        error.message
-      );
-    }
-
-    // --------------------------------------------------
-    // REMINDER
-    // --------------------------------------------------
-
-    await ensureReminder(channel);
-
-    // --------------------------------------------------
-    // SINGLE PARTY CHAT
-    // --------------------------------------------------
-
-    await ensurePartyThread(channel);
-
-    console.log(
-      "🍽️ Kain Po Tayo Team Ryzza Foodie system is ready."
-    );
-  } catch (error) {
-    console.error(
-      "❌ Ready setup error:",
       error
     );
   }
-});
+}
 
 // ======================================================
 // MAIN MESSAGE HANDLER
 // ======================================================
 
 client.on("messageCreate", async (message) => {
-  // Ignore all bot messages.
-  //
-  // This keeps:
-  // - approved food posts
-  // - Foodie Reminder
-  // - Party Chat notifications
-  // visible.
+  // Never moderate bot messages.
   if (message.author.bot) {
     return;
   }
 
-  // Only moderate the MAIN Foodie channel.
-  //
-  // Party Chat has a different channel/thread ID,
-  // so normal chatting there is allowed.
+  // Only moderate the main Foodie channel.
   if (message.channel.id !== FOOD_CHANNEL_ID) {
     return;
   }
@@ -824,7 +858,13 @@ client.on("messageCreate", async (message) => {
   // CLEANUP COMMAND
   // ====================================================
 
-  if (message.content.startsWith("!cleanup")) {
+  if (
+    message.content
+      .trim()
+      .toLowerCase()
+      .startsWith("!cleanup")
+  ) {
+    // Delete command first.
     try {
       await message.delete();
     } catch {
@@ -837,7 +877,7 @@ client.on("messageCreate", async (message) => {
   }
 
   // ====================================================
-  // READ SUBMISSION
+  // MESSAGE INFORMATION
   // ====================================================
 
   const content =
@@ -875,24 +915,16 @@ client.on("messageCreate", async (message) => {
     imageAttachment
   ) {
     try {
-      // Download FIRST.
-      // Discord attachment URLs can stop working
-      // after the original message is deleted.
+      // Download BEFORE deleting.
       const buffer =
         await downloadAttachment(
           imageAttachment.url
         );
 
-      // Tell the user privately.
-      await sendPrivateDM(
-        message.author,
-        "🔎 Checking your food picture..."
-      );
-
-      // Delete original immediately.
+      // Delete original user message.
       await message.delete();
 
-      // Add to one-at-a-time queue.
+      // Add to queue.
       addToFoodQueue({
         user: message.author,
         buffer,
@@ -904,7 +936,7 @@ client.on("messageCreate", async (message) => {
       return;
     } catch (error) {
       console.error(
-        "❌ Could not download food image:",
+        "❌ Could not process food image:",
         error.message
       );
 
@@ -946,7 +978,7 @@ client.on("messageCreate", async (message) => {
   }
 
   // ====================================================
-  // EVERYTHING ELSE IS DELETED
+  // DELETE EVERYTHING ELSE
   // ====================================================
 
   try {
@@ -958,11 +990,7 @@ client.on("messageCreate", async (message) => {
     );
   }
 
-  // ====================================================
-  // PRIVATE HELP
-  // ====================================================
-
-  // Picture/file without the trigger
+  // Picture/file without trigger
   if (!isExactTrigger && hasAttachment) {
     await sendPrivateDM(
       message.author,
@@ -972,7 +1000,7 @@ client.on("messageCreate", async (message) => {
     return;
   }
 
-  // Trigger without a picture
+  // Trigger without picture
   if (isExactTrigger && !hasAttachment) {
     await sendPrivateDM(
       message.author,
@@ -983,7 +1011,64 @@ client.on("messageCreate", async (message) => {
   }
 
   // Normal text, emoji, sticker, GIF, etc.
-  // is simply deleted to keep the channel clean.
+  // Deleted silently.
+});
+
+// ======================================================
+// BOT READY
+// ======================================================
+
+client.once("ready", async () => {
+  console.log(
+    `✅ Logged in as ${client.user.tag}`
+  );
+
+  try {
+    const channel =
+      await client.channels.fetch(
+        FOOD_CHANNEL_ID
+      );
+
+    if (!channel || !channel.isTextBased()) {
+      console.error(
+        "❌ Food channel is invalid."
+      );
+
+      return;
+    }
+
+    // 30-second member slowmode
+    try {
+      await channel.setRateLimitPerUser(
+        FOOD_SLOWMODE_SECONDS,
+        "Kain Po Tayo Team Ryzza Foodie slowmode"
+      );
+
+      console.log(
+        "✅ Member slowmode: 30 seconds"
+      );
+    } catch (error) {
+      console.error(
+        "⚠️ Could not set slowmode:",
+        error.message
+      );
+    }
+
+    // Reminder
+    await ensureReminder(channel);
+
+    // Single Party Chat
+    await ensurePartyThread(channel);
+
+    console.log(
+      "🍽️ Kain Po Tayo Team Ryzza Foodie system is ready."
+    );
+  } catch (error) {
+    console.error(
+      "❌ Ready setup error:",
+      error
+    );
+  }
 });
 
 // ======================================================
