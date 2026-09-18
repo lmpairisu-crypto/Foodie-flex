@@ -24,7 +24,6 @@ const PORT = process.env.PORT || 10000;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// Food channel — hard-coded as requested
 const FOOD_CHANNEL_ID = "1550189625954402314";
 
 const TRIGGER = "kain po tayo team ryzza";
@@ -32,25 +31,21 @@ const TRIGGER = "kain po tayo team ryzza";
 const AI_MODEL = "gpt-5.6-luna";
 
 // ============================================================
-// CHECK ENVIRONMENT VARIABLES
+// ENVIRONMENT
 // ============================================================
 
 if (!DISCORD_TOKEN) {
-  console.error("❌ DISCORD_TOKEN is missing from Render Environment Variables.");
+  console.error("❌ DISCORD_TOKEN is missing.");
   process.exit(1);
 }
 
 if (!OPENAI_API_KEY) {
-  console.error("❌ OPENAI_API_KEY is missing from Render Environment Variables.");
+  console.error("❌ OPENAI_API_KEY is missing.");
   process.exit(1);
 }
 
-console.log("✅ DISCORD_TOKEN found.");
-console.log("✅ OPENAI_API_KEY found.");
-console.log(`🍽️ Food channel: ${FOOD_CHANNEL_ID}`);
-
 // ============================================================
-// EXPRESS HEALTH SERVER
+// HEALTH SERVER
 // ============================================================
 
 const app = express();
@@ -72,7 +67,7 @@ const openai = new OpenAI({
 });
 
 // ============================================================
-// DISCORD CLIENT
+// DISCORD
 // ============================================================
 
 const client = new Client({
@@ -94,7 +89,7 @@ async function ensureTempDir() {
 }
 
 // ============================================================
-// HELPER: TRIGGER CHECK
+// BASIC HELPERS
 // ============================================================
 
 function hasTrigger(message) {
@@ -103,56 +98,58 @@ function hasTrigger(message) {
     .includes(TRIGGER);
 }
 
-// ============================================================
-// HELPER: ATTACHMENT TYPES
-// ============================================================
-
-function isImageAttachment(attachment) {
-  const contentType = attachment.contentType || "";
+function isImage(attachment) {
+  const type = attachment.contentType || "";
   const name = attachment.name || "";
 
   return (
-    contentType.startsWith("image/") ||
+    type.startsWith("image/") ||
     /\.(jpg|jpeg|png|webp|gif)$/i.test(name)
   );
 }
 
-function isGifAttachment(attachment) {
-  const contentType = attachment.contentType || "";
+function isGif(attachment) {
+  const type = attachment.contentType || "";
   const name = attachment.name || "";
 
   return (
-    contentType === "image/gif" ||
+    type === "image/gif" ||
     /\.gif$/i.test(name)
   );
 }
 
-function isVideoAttachment(attachment) {
-  const contentType = attachment.contentType || "";
+function isVideo(attachment) {
+  const type = attachment.contentType || "";
   const name = attachment.name || "";
 
   return (
-    contentType.startsWith("video/") ||
+    type.startsWith("video/") ||
     /\.(mp4|mov|webm|mkv|avi|m4v)$/i.test(name)
   );
 }
 
-function isAudioAttachment(attachment) {
-  const contentType = attachment.contentType || "";
+function isAudio(attachment) {
+  const type = attachment.contentType || "";
   const name = attachment.name || "";
 
   return (
-    contentType.startsWith("audio/") ||
+    type.startsWith("audio/") ||
     /\.(mp3|wav|ogg|m4a|aac|flac|opus)$/i.test(name)
   );
 }
 
+function getMedia(message) {
+  return [...message.attachments.values()].filter(
+    attachment =>
+      isImage(attachment) || isVideo(attachment)
+  );
+}
+
 // ============================================================
-// HELPER: VOICE MESSAGE
+// VOICE MESSAGE DETECTION
 // ============================================================
 
 function isVoiceMessage(message) {
-  // Native Discord Voice Message
   if (
     message.flags &&
     typeof message.flags.has === "function" &&
@@ -161,7 +158,6 @@ function isVoiceMessage(message) {
     return true;
   }
 
-  // Extra protection for Discord voice-message attachments
   for (const attachment of message.attachments.values()) {
     if (
       attachment.duration_secs !== undefined ||
@@ -175,340 +171,411 @@ function isVoiceMessage(message) {
 }
 
 // ============================================================
-// HELPER: MEDIA
+// DELETE
 // ============================================================
 
-function getMediaAttachments(message) {
-  return [...message.attachments.values()].filter((attachment) => {
-    return (
-      isImageAttachment(attachment) ||
-      isVideoAttachment(attachment)
-    );
-  });
-}
-
-// ============================================================
-// DELETE MESSAGE
-// ============================================================
-
-async function deleteMessage(message, reason) {
+async function removeMessage(message, reason) {
   try {
     console.log("========================================");
-    console.log("🗑️ DELETE ACTION");
+    console.log("🗑️ REMOVING MESSAGE");
+    console.log(`Author: ${message.author?.tag}`);
     console.log(`Message ID: ${message.id}`);
-    console.log(`Author: ${message.author?.tag || "Unknown"}`);
     console.log(`Reason: ${reason}`);
-
-    if (message.content) {
-      console.log(`Content: ${message.content}`);
-    }
-
     console.log("========================================");
 
     await message.delete();
 
-    console.log(`✅ Message ${message.id} deleted successfully.`);
+    console.log("✅ Removed successfully.");
 
     return true;
   } catch (error) {
-    console.error(`❌ Failed to delete message ${message.id}:`, error.message);
+    console.error(
+      "❌ Delete failed:",
+      error.message
+    );
 
     return false;
   }
 }
 
 // ============================================================
-// DOWNLOAD FILE
+// PRIVATE SENDER STATUS
 // ============================================================
 
-async function downloadFile(url, extension = "bin") {
+async function sendPrivateStatus(user, text) {
+  try {
+    await user.send(text);
+
+    console.log(
+      `📩 Private status sent to ${user.tag}`
+    );
+
+    return true;
+  } catch (error) {
+    console.log(
+      `⚠️ Could not DM ${user.tag}: ${error.message}`
+    );
+
+    return false;
+  }
+}
+
+// ============================================================
+// DOWNLOAD
+// ============================================================
+
+async function downloadFile(url, extension) {
   const response = await fetch(url);
 
   if (!response.ok) {
-    throw new Error(`Download failed: HTTP ${response.status}`);
+    throw new Error(
+      `Download failed: HTTP ${response.status}`
+    );
   }
 
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const buffer = Buffer.from(
+    await response.arrayBuffer()
+  );
 
   const filename =
     `${crypto.randomBytes(8).toString("hex")}.${extension}`;
 
-  const filePath = path.join(TEMP_DIR, filename);
+  const filePath =
+    path.join(TEMP_DIR, filename);
 
-  await fsp.writeFile(filePath, buffer);
+  await fsp.writeFile(
+    filePath,
+    buffer
+  );
 
   return filePath;
 }
 
 // ============================================================
-// FFMPEG FRAME EXTRACTION
+// FFMPEG
 // ============================================================
 
-function extractFrames(inputPath, outputPrefix) {
+function extractFrames(inputPath, prefix) {
   return new Promise((resolve, reject) => {
-    const outputPattern = `${outputPrefix}-%02d.jpg`;
+    const outputPattern =
+      `${prefix}-%02d.jpg`;
 
     const args = [
       "-y",
       "-i",
       inputPath,
-
-      // Sample roughly 2 frames per second
       "-vf",
       "fps=2",
-
-      // Maximum 4 frames
       "-frames:v",
       "4",
-
       "-q:v",
       "3",
-
       outputPattern
     ];
 
-    console.log("🎞️ Extracting frames with FFmpeg...");
-
-    const ffmpeg = spawn(ffmpegPath, args);
+    const ffmpeg =
+      spawn(ffmpegPath, args);
 
     let stderr = "";
 
-    ffmpeg.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-
-    ffmpeg.on("error", (error) => {
-      reject(error);
-    });
-
-    ffmpeg.on("close", async (code) => {
-      if (code !== 0) {
-        reject(
-          new Error(`FFmpeg failed with code ${code}: ${stderr}`)
-        );
-        return;
+    ffmpeg.stderr.on(
+      "data",
+      data => {
+        stderr += data.toString();
       }
+    );
 
-      try {
-        const files = await fsp.readdir(TEMP_DIR);
+    ffmpeg.on(
+      "error",
+      reject
+    );
 
-        const frames = files
-          .filter((file) => file.startsWith(path.basename(outputPrefix)))
-          .filter((file) => file.endsWith(".jpg"))
-          .map((file) => path.join(TEMP_DIR, file))
-          .sort();
+    ffmpeg.on(
+      "close",
+      async code => {
+        if (code !== 0) {
+          reject(
+            new Error(
+              `FFmpeg failed: ${stderr}`
+            )
+          );
 
-        resolve(frames);
-      } catch (error) {
-        reject(error);
+          return;
+        }
+
+        try {
+          const files =
+            await fsp.readdir(TEMP_DIR);
+
+          const frames =
+            files
+              .filter(file =>
+                file.startsWith(
+                  path.basename(prefix)
+                )
+              )
+              .filter(file =>
+                file.endsWith(".jpg")
+              )
+              .map(file =>
+                path.join(
+                  TEMP_DIR,
+                  file
+                )
+              )
+              .sort();
+
+          resolve(frames);
+        } catch (error) {
+          reject(error);
+        }
       }
-    });
+    );
   });
 }
 
 // ============================================================
-// AI FOOD CHECK — IMAGE
+// AI — IMAGE
 // ============================================================
 
-async function checkImageWithAI(imageUrl) {
+async function checkImage(imageUrl) {
   console.log("🤖 AI checking image...");
 
   try {
-    const response = await openai.responses.create({
-      model: AI_MODEL,
+    const response =
+      await openai.responses.create({
+        model: AI_MODEL,
 
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "Determine whether this image clearly contains food or a meal. " +
-                "Reply with ONLY FOOD or NOT_FOOD. " +
-                "People eating food count as FOOD if food is clearly visible."
-            },
-            {
-              type: "input_image",
-              image_url: imageUrl
-            }
-          ]
-        }
-      ]
-    });
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "Look at this image. " +
+                  "Determine whether it clearly contains food or a meal. " +
+                  "Reply with ONLY FOOD or NOT_FOOD."
+              },
+              {
+                type: "input_image",
+                image_url: imageUrl
+              }
+            ]
+          }
+        ]
+      });
 
-    const result = response.output_text
-      .trim()
-      .toUpperCase();
+    const result =
+      response.output_text
+        .trim()
+        .toUpperCase();
 
-    console.log(`🤖 AI result: ${result}`);
+    console.log(
+      `🤖 AI result: ${result}`
+    );
 
     return result.includes("FOOD");
   } catch (error) {
-    console.error("❌ Image AI check failed:", error.message);
+    console.error(
+      "❌ AI image error:",
+      error.message
+    );
 
-    // Fail closed: don't allow unverified media
     return false;
   }
 }
 
 // ============================================================
-// AI FOOD CHECK — FRAMES
+// AI — GIF / VIDEO FRAMES
 // ============================================================
 
-async function checkFramesWithAI(framePaths) {
-  console.log(`🤖 AI checking ${framePaths.length} frame(s)...`);
+async function checkFrames(framePaths) {
+  console.log(
+    `🤖 AI checking ${framePaths.length} frame(s)...`
+  );
 
   const content = [
     {
       type: "input_text",
       text:
-        "Determine whether these frames from one GIF/video contain food or a meal. " +
-        "Reply with ONLY FOOD or NOT_FOOD. " +
-        "If food is clearly visible in the frames, reply FOOD."
+        "These are frames from a GIF or video. " +
+        "Determine whether they contain food or a meal. " +
+        "Reply with ONLY FOOD or NOT_FOOD."
     }
   ];
 
-  for (const framePath of framePaths) {
-    const buffer = await fsp.readFile(framePath);
-
-    const base64 = buffer.toString("base64");
+  for (const frame of framePaths) {
+    const buffer =
+      await fsp.readFile(frame);
 
     content.push({
       type: "input_image",
-      image_url: `data:image/jpeg;base64,${base64}`
+      image_url:
+        `data:image/jpeg;base64,${buffer.toString("base64")}`
     });
   }
 
   try {
-    const response = await openai.responses.create({
-      model: AI_MODEL,
+    const response =
+      await openai.responses.create({
+        model: AI_MODEL,
 
-      input: [
-        {
-          role: "user",
-          content
-        }
-      ]
-    });
+        input: [
+          {
+            role: "user",
+            content
+          }
+        ]
+      });
 
-    const result = response.output_text
-      .trim()
-      .toUpperCase();
+    const result =
+      response.output_text
+        .trim()
+        .toUpperCase();
 
-    console.log(`🤖 AI result: ${result}`);
+    console.log(
+      `🤖 AI result: ${result}`
+    );
 
     return result.includes("FOOD");
   } catch (error) {
-    console.error("❌ Frame AI check failed:", error.message);
+    console.error(
+      "❌ AI frame error:",
+      error.message
+    );
 
     return false;
   }
 }
 
 // ============================================================
-// CHECK MEDIA WITH AI
+// AI MEDIA CHECK
 // ============================================================
 
-async function checkMediaWithAI(attachment) {
-  const name = attachment.name || "unknown";
-  const contentType = attachment.contentType || "";
-
-  console.log(`🔎 Checking media: ${name}`);
-  console.log(`Content type: ${contentType}`);
-
-  // ----------------------------------------------------------
-  // Normal image
-  // ----------------------------------------------------------
-
+async function checkMedia(attachment) {
+  // IMAGE
   if (
-    isImageAttachment(attachment) &&
-    !isGifAttachment(attachment)
+    isImage(attachment) &&
+    !isGif(attachment)
   ) {
-    return await checkImageWithAI(attachment.url);
+    return await checkImage(
+      attachment.url
+    );
   }
 
-  // ----------------------------------------------------------
   // GIF
-  // ----------------------------------------------------------
-
-  if (isGifAttachment(attachment)) {
+  if (isGif(attachment)) {
     let inputPath = null;
     let frames = [];
 
     try {
-      inputPath = await downloadFile(attachment.url, "gif");
+      inputPath =
+        await downloadFile(
+          attachment.url,
+          "gif"
+        );
 
-      const prefix = path.join(
-        TEMP_DIR,
-        `gif-${crypto.randomBytes(6).toString("hex")}`
-      );
+      const prefix =
+        path.join(
+          TEMP_DIR,
+          `gif-${crypto.randomBytes(6).toString("hex")}`
+        );
 
-      frames = await extractFrames(inputPath, prefix);
+      frames =
+        await extractFrames(
+          inputPath,
+          prefix
+        );
 
-      if (frames.length === 0) {
-        console.log("❌ No GIF frames extracted.");
+      if (!frames.length) {
         return false;
       }
 
-      return await checkFramesWithAI(frames);
+      return await checkFrames(frames);
     } catch (error) {
-      console.error("❌ GIF processing failed:", error.message);
+      console.error(
+        "❌ GIF check failed:",
+        error.message
+      );
+
       return false;
     } finally {
       if (inputPath) {
-        await fsp.unlink(inputPath).catch(() => {});
+        await fsp.unlink(
+          inputPath
+        ).catch(() => {});
       }
 
       for (const frame of frames) {
-        await fsp.unlink(frame).catch(() => {});
+        await fsp.unlink(
+          frame
+        ).catch(() => {});
       }
     }
   }
 
-  // ----------------------------------------------------------
-  // Video
-  // ----------------------------------------------------------
-
-  if (isVideoAttachment(attachment)) {
+  // VIDEO
+  if (isVideo(attachment)) {
     let inputPath = null;
     let frames = [];
 
     try {
       let extension = "mp4";
 
-      if (/\.(webm)$/i.test(name)) extension = "webm";
-      if (/\.(mov)$/i.test(name)) extension = "mov";
-      if (/\.(mkv)$/i.test(name)) extension = "mkv";
+      if (/\.(webm)$/i.test(attachment.name || "")) {
+        extension = "webm";
+      }
 
-      inputPath = await downloadFile(
-        attachment.url,
-        extension
-      );
+      if (/\.(mov)$/i.test(attachment.name || "")) {
+        extension = "mov";
+      }
 
-      const prefix = path.join(
-        TEMP_DIR,
-        `video-${crypto.randomBytes(6).toString("hex")}`
-      );
+      if (/\.(mkv)$/i.test(attachment.name || "")) {
+        extension = "mkv";
+      }
 
-      frames = await extractFrames(inputPath, prefix);
+      inputPath =
+        await downloadFile(
+          attachment.url,
+          extension
+        );
 
-      if (frames.length === 0) {
-        console.log("❌ No video frames extracted.");
+      const prefix =
+        path.join(
+          TEMP_DIR,
+          `video-${crypto.randomBytes(6).toString("hex")}`
+        );
+
+      frames =
+        await extractFrames(
+          inputPath,
+          prefix
+        );
+
+      if (!frames.length) {
         return false;
       }
 
-      return await checkFramesWithAI(frames);
+      return await checkFrames(frames);
     } catch (error) {
-      console.error("❌ Video processing failed:", error.message);
+      console.error(
+        "❌ Video check failed:",
+        error.message
+      );
+
       return false;
     } finally {
       if (inputPath) {
-        await fsp.unlink(inputPath).catch(() => {});
+        await fsp.unlink(
+          inputPath
+        ).catch(() => {});
       }
 
       for (const frame of frames) {
-        await fsp.unlink(frame).catch(() => {});
+        await fsp.unlink(
+          frame
+        ).catch(() => {});
       }
     }
   }
@@ -517,88 +584,171 @@ async function checkMediaWithAI(attachment) {
 }
 
 // ============================================================
-// REPOST APPROVED FOOD
+// FOOD EMOJI
 // ============================================================
 
-async function repostApprovedFood(message, attachment) {
+function chooseFoodEmoji(text) {
+  const value =
+    text.toLowerCase();
+
+  if (
+    value.includes("pizza")
+  ) return "🍕";
+
+  if (
+    value.includes("burger") ||
+    value.includes("hamburger")
+  ) return "🍔";
+
+  if (
+    value.includes("fries") ||
+    value.includes("french fries")
+  ) return "🍟";
+
+  if (
+    value.includes("chicken")
+  ) return "🍗";
+
+  if (
+    value.includes("noodle") ||
+    value.includes("ramen") ||
+    value.includes("pasta")
+  ) return "🍜";
+
+  if (
+    value.includes("rice")
+  ) return "🍚";
+
+  if (
+    value.includes("cake") ||
+    value.includes("dessert")
+  ) return "🍰";
+
+  if (
+    value.includes("ice cream")
+  ) return "🍦";
+
+  if (
+    value.includes("coffee")
+  ) return "☕";
+
+  if (
+    value.includes("drink") ||
+    value.includes("juice") ||
+    value.includes("milk")
+  ) return "🥤";
+
+  return "🍽️";
+}
+
+// ============================================================
+// PUBLIC APPROVED POST
+// ============================================================
+
+async function publishApprovedFood(
+  message,
+  attachment
+) {
+  const emoji =
+    chooseFoodEmoji(
+      message.content
+    );
+
+  const sender =
+    message.author;
+
   try {
-    const sender = message.author;
-
-    await message.delete();
-
     await message.channel.send({
       content:
-        `Kain Po Tayo Team Ryzza 🍽️\n` +
-        `👤 Sent by: ${sender}`
-      ,
+        `**𝑲𝒂𝒊𝒏 𝑷𝒐 𝑻𝒂𝒚𝒐 𝑻𝒆𝒂𝒎 𝑹𝒚𝒛𝒛𝒂 ${emoji}**\n` +
+        `👤 ${sender}`,
       files: [
         {
           attachment: attachment.url,
-          name: attachment.name || "food"
+          name:
+            attachment.name ||
+            "food"
         }
-      ]
+      ],
+      allowedMentions: {
+        users: [
+          sender.id
+        ]
+      }
     });
 
     console.log(
-      `✅ Approved food reposted. Original sender: ${sender.tag}`
+      `📢 Public approved post sent for ${sender.tag}`
     );
 
     return true;
   } catch (error) {
-    console.error("❌ Failed to repost approved food:", error.message);
+    console.error(
+      "❌ Failed to publish:",
+      error.message
+    );
 
     return false;
   }
 }
 
 // ============================================================
-// FOOD REMINDER
+// REMINDER
 // ============================================================
 
-async function sendFoodReminder(channel) {
+async function ensureReminder(channel) {
   try {
-    const messages = await channel.messages.fetch({
-      limit: 50
-    });
+    const messages =
+      await channel.messages.fetch({
+        limit: 50
+      });
 
-    const existingReminder = messages.find((msg) => {
-      if (!msg.author?.bot) return false;
-
-      return msg.embeds.some(
-        (embed) => embed.title === "🍽️ Foodie Reminder"
+    const existing =
+      messages.find(
+        msg =>
+          msg.author?.id === client.user.id &&
+          msg.embeds.some(
+            embed =>
+              embed.title ===
+              "🍽️ Foodie Reminder"
+          )
       );
-    });
 
-    if (existingReminder) {
-      if (!existingReminder.pinned) {
-        await existingReminder.pin().catch(() => {});
-        console.log("📌 Existing Foodie Reminder pinned.");
-      } else {
-        console.log("📌 Foodie Reminder already exists.");
+    if (existing) {
+      if (!existing.pinned) {
+        await existing.pin().catch(() => {});
       }
 
       return;
     }
 
-    const reminder = await channel.send({
-      embeds: [
-        {
-          title: "🍽️ Foodie Reminder",
-          description:
-            "To post your food picture:\n\n" +
-            "**Say Kain Po Tayo Team Ryzza**\n" +
-            "together with your food picture.\n\n" +
-            "🤖 **The Bot**\n" +
-            "will check your picture and only allow food pictures."
-        }
-      ]
-    });
+    const reminder =
+      await channel.send({
+        embeds: [
+          {
+            title:
+              "🍽️ Foodie Reminder",
+
+            description:
+              "To post your food picture:\n\n" +
+              "**Say Kain Po Tayo Team Ryzza**\n" +
+              "together with your food picture.\n\n" +
+              "🤖 **The Bot**\n" +
+              "will check your picture and only allow food pictures."
+          }
+        ]
+      });
 
     await reminder.pin().catch(() => {});
 
-    console.log("📌 New Foodie Reminder created and pinned.");
+    console.log(
+      "📌 Food reminder created and pinned."
+    );
   } catch (error) {
-    console.error("❌ Failed to create Foodie Reminder:", error.message);
+    console.error(
+      "❌ Reminder error:",
+      error.message
+    );
   }
 }
 
@@ -606,18 +756,16 @@ async function sendFoodReminder(channel) {
 // CLEANUP OLD MESSAGES
 // ============================================================
 
-async function cleanupFoodChannel(channel) {
+async function cleanupChannel(channel) {
   console.log("========================================");
-  console.log("🧹 STARTING FULL FOOD CHANNEL CLEANUP");
-  console.log(`Channel: ${channel.name}`);
-  console.log(`Channel ID: ${channel.id}`);
+  console.log("🧹 FULL CLEANUP STARTED");
   console.log("========================================");
 
   let scanned = 0;
   let deleted = 0;
   let foodKept = 0;
 
-  let before = undefined;
+  let before;
 
   while (true) {
     let batch;
@@ -631,157 +779,161 @@ async function cleanupFoodChannel(channel) {
         options.before = before;
       }
 
-      batch = await channel.messages.fetch(options);
+      batch =
+        await channel.messages.fetch(
+          options
+        );
     } catch (error) {
       console.error(
-        "❌ Failed to fetch message history:",
+        "❌ History fetch failed:",
         error.message
       );
 
       break;
     }
 
-    if (batch.size === 0) {
+    if (!batch.size) {
       break;
     }
 
-    console.log(`📥 Fetched ${batch.size} messages.`);
+    console.log(
+      `📥 Fetched ${batch.size} messages`
+    );
 
     for (const message of batch.values()) {
       scanned++;
 
-      // Never delete this bot's own messages
-      if (message.author?.id === client.user.id) {
+      if (
+        message.author.id ===
+        client.user.id
+      ) {
         continue;
       }
 
-      // --------------------------------------------------------
-      // VOICE MESSAGE
-      // --------------------------------------------------------
-
+      // VOICE
       if (isVoiceMessage(message)) {
-        if (await deleteMessage(message, "Voice message")) {
-          deleted++;
-        }
+        if (
+          await removeMessage(
+            message,
+            "Voice message"
+          )
+        ) deleted++;
 
         continue;
       }
 
-      // --------------------------------------------------------
       // STICKER
-      // --------------------------------------------------------
-
-      if (message.stickers && message.stickers.size > 0) {
-        if (await deleteMessage(message, "Sticker / server sticker")) {
-          deleted++;
-        }
+      if (
+        message.stickers.size > 0
+      ) {
+        if (
+          await removeMessage(
+            message,
+            "Sticker"
+          )
+        ) deleted++;
 
         continue;
       }
 
-      // --------------------------------------------------------
       // AUDIO
-      // --------------------------------------------------------
+      const audio =
+        [...message.attachments.values()]
+          .some(isAudio);
 
-      const hasAudio = [...message.attachments.values()].some(
-        isAudioAttachment
-      );
-
-      if (hasAudio) {
-        if (await deleteMessage(message, "Audio message")) {
-          deleted++;
-        }
-
-        continue;
-      }
-
-      // --------------------------------------------------------
-      // MEDIA
-      // --------------------------------------------------------
-
-      const media = getMediaAttachments(message);
-
-      // --------------------------------------------------------
-      // NO MEDIA
-      // --------------------------------------------------------
-
-      if (media.length === 0) {
-        if (await deleteMessage(
-          message,
-          "Text / emoji without food media"
-        )) {
-          deleted++;
-        }
+      if (audio) {
+        if (
+          await removeMessage(
+            message,
+            "Audio"
+          )
+        ) deleted++;
 
         continue;
       }
 
-      // --------------------------------------------------------
+      const media =
+        getMedia(message);
+
+      // TEXT / EMOJI
+      if (!media.length) {
+        if (
+          await removeMessage(
+            message,
+            "Text / emoji without picture or video"
+          )
+        ) deleted++;
+
+        continue;
+      }
+
       // MEDIA WITHOUT TRIGGER
-      // --------------------------------------------------------
-
       if (!hasTrigger(message)) {
-        if (await deleteMessage(
-          message,
-          "Image / GIF / video without trigger"
-        )) {
-          deleted++;
-        }
+        if (
+          await removeMessage(
+            message,
+            "Picture / video without trigger"
+          )
+        ) deleted++;
 
         continue;
       }
 
-      // --------------------------------------------------------
       // MEDIA + TRIGGER
-      // --------------------------------------------------------
-
-      let messageIsFood = false;
+      let food = false;
 
       for (const attachment of media) {
-        const approved = await checkMediaWithAI(attachment);
-
-        if (approved) {
-          messageIsFood = true;
+        if (
+          await checkMedia(
+            attachment
+          )
+        ) {
+          food = true;
           break;
         }
       }
 
-      if (messageIsFood) {
+      if (food) {
         foodKept++;
 
         console.log(
-          `🍽️ Food kept: ${message.id} from ${message.author.tag}`
+          `🍽️ Existing food kept from ${message.author.tag}`
         );
       } else {
-        if (await deleteMessage(
-          message,
-          "AI determined media is not food"
-        )) {
-          deleted++;
-        }
+        if (
+          await removeMessage(
+            message,
+            "AI rejected as non-food"
+          )
+        ) deleted++;
       }
     }
 
-    // Move backward in history
-    const oldestMessage = batch.last();
+    const oldest =
+      batch.last();
 
-    if (!oldestMessage) {
+    if (!oldest) {
       break;
     }
 
-    before = oldestMessage.id;
+    before =
+      oldest.id;
 
-    // If fewer than 100 were returned, we've reached the beginning.
     if (batch.size < 100) {
       break;
     }
 
-    // Small delay to reduce pressure on Discord API
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await new Promise(
+      resolve =>
+        setTimeout(
+          resolve,
+          250
+        )
+    );
   }
 
   console.log("========================================");
-  console.log("🧹 CLEANUP FINISHED");
+  console.log("🧹 CLEANUP COMPLETE");
   console.log(`Scanned: ${scanned}`);
   console.log(`Deleted: ${deleted}`);
   console.log(`Food kept: ${foodKept}`);
@@ -795,260 +947,314 @@ async function cleanupFoodChannel(channel) {
 }
 
 // ============================================================
-// BOT READY
+// READY
 // ============================================================
 
 client.once("ready", async () => {
   console.log("========================================");
-  console.log(`🤖 Logged in as ${client.user.tag}`);
-  console.log(`🆔 Bot ID: ${client.user.id}`);
+  console.log(
+    `🤖 Logged in as ${client.user.tag}`
+  );
+  console.log(
+    `🍽️ Food channel: ${FOOD_CHANNEL_ID}`
+  );
   console.log("========================================");
 
   try {
-    const channel = await client.channels.fetch(
-      FOOD_CHANNEL_ID
-    );
+    const channel =
+      await client.channels.fetch(
+        FOOD_CHANNEL_ID
+      );
 
-    if (!channel) {
-      console.error("❌ Food channel not found.");
+    if (
+      !channel ||
+      !channel.isTextBased()
+    ) {
+      console.error(
+        "❌ Food channel unavailable."
+      );
+
       return;
     }
 
-    if (!channel.isTextBased()) {
-      console.error("❌ Food channel is not a text channel.");
-      return;
-    }
-
-    console.log(
-      `🍽️ Food channel found: ${channel.name} (${channel.id})`
-    );
-
-    await sendFoodReminder(channel);
+    await ensureReminder(channel);
   } catch (error) {
     console.error(
-      "❌ Failed to initialize food channel:",
+      "❌ Startup channel error:",
       error.message
     );
   }
 });
 
 // ============================================================
-// MESSAGE HANDLER
+// MESSAGE FLOW
 // ============================================================
 
-client.on("messageCreate", async (message) => {
-  try {
-    // ----------------------------------------------------------
-    // ONLY FOOD CHANNEL
-    // ----------------------------------------------------------
-
-    if (message.channel.id !== FOOD_CHANNEL_ID) {
-      return;
-    }
-
-    // ----------------------------------------------------------
-    // IGNORE THIS BOT'S OWN MESSAGES
-    // ----------------------------------------------------------
-
-    if (message.author.id === client.user.id) {
-      return;
-    }
-
-    console.log("========================================");
-    console.log("📨 MESSAGE RECEIVED");
-    console.log(`Message ID: ${message.id}`);
-    console.log(`Author: ${message.author.tag}`);
-    console.log(`Channel ID: ${message.channel.id}`);
-    console.log(`Content: ${message.content || "[NO TEXT]"}`);
-    console.log(`Attachments: ${message.attachments.size}`);
-    console.log(`Stickers: ${message.stickers.size}`);
-    console.log("========================================");
-
-    // ----------------------------------------------------------
-    // !cleanup
-    // ----------------------------------------------------------
-
-    if (
-      message.content.trim().toLowerCase() === "!cleanup"
-    ) {
-      const member = message.member;
+client.on(
+  "messageCreate",
+  async message => {
+    try {
+      // --------------------------------------------------------
+      // FOOD CHANNEL ONLY
+      // --------------------------------------------------------
 
       if (
-        !member ||
-        !member.permissions.has(
-          PermissionsBitField.Flags.ManageMessages
-        )
+        message.channel.id !==
+        FOOD_CHANNEL_ID
       ) {
-        console.log("❌ !cleanup denied: no Manage Messages permission.");
+        return;
+      }
 
-        await message.reply(
-          "❌ You need **Manage Messages** permission to use `!cleanup`."
+      // --------------------------------------------------------
+      // OWN BOT MESSAGES
+      // --------------------------------------------------------
+
+      if (
+        message.author.id ===
+        client.user.id
+      ) {
+        return;
+      }
+
+      // --------------------------------------------------------
+      // CLEANUP COMMAND
+      // --------------------------------------------------------
+
+      if (
+        message.content
+          .trim()
+          .toLowerCase() ===
+        "!cleanup"
+      ) {
+        if (
+          !message.member?.permissions.has(
+            PermissionsBitField.Flags.ManageMessages
+          )
+        ) {
+          await message.reply(
+            "❌ You need **Manage Messages** permission."
+          );
+
+          return;
+        }
+
+        const result =
+          await cleanupChannel(
+            message.channel
+          );
+
+        await message.delete().catch(
+          () => {}
+        );
+
+        const summary =
+          await message.channel.send({
+            content:
+              `🧹 **Cleanup complete**\n` +
+              `Scanned: **${result.scanned}**\n` +
+              `Deleted: **${result.deleted}**\n` +
+              `Food kept: **${result.foodKept}**`
+          });
+
+        setTimeout(
+          () =>
+            summary.delete().catch(
+              () => {}
+            ),
+          15000
         );
 
         return;
       }
 
-      console.log("🧹 !cleanup command accepted.");
+      // ========================================================
+      // EVERYTHING BELOW IS AUTOMATIC
+      // ========================================================
 
-      // Delete command after we record its ID.
-      const commandId = message.id;
+      // --------------------------------------------------------
+      // VOICE MESSAGE
+      // --------------------------------------------------------
 
-      const result = await cleanupFoodChannel(
-        message.channel
-      );
-
-      // Delete the command itself
-      try {
-        const commandMessage =
-          await message.channel.messages.fetch(commandId);
-
-        await commandMessage.delete();
-      } catch (error) {
-        console.log(
-          "ℹ️ Cleanup command was already deleted or unavailable."
+      if (
+        isVoiceMessage(message)
+      ) {
+        await removeMessage(
+          message,
+          "Voice message"
         );
+
+        return;
       }
 
-      const summary = await message.channel.send({
-        content:
-          `🧹 **Cleanup complete.**\n` +
-          `Scanned: **${result.scanned}** messages\n` +
-          `Deleted: **${result.deleted}** messages\n` +
-          `Food kept: **${result.foodKept}** messages`
-      });
+      // --------------------------------------------------------
+      // STICKER
+      // --------------------------------------------------------
 
-      setTimeout(() => {
-        summary.delete().catch(() => {});
-      }, 15000);
+      if (
+        message.stickers.size > 0
+      ) {
+        await removeMessage(
+          message,
+          "Sticker"
+        );
 
-      return;
-    }
+        return;
+      }
 
-    // ----------------------------------------------------------
-    // NATIVE DISCORD VOICE MESSAGE
-    // ----------------------------------------------------------
+      // --------------------------------------------------------
+      // AUDIO
+      // --------------------------------------------------------
 
-    if (isVoiceMessage(message)) {
-      await deleteMessage(
-        message,
-        "Voice message / VM is not allowed"
+      const audio =
+        [...message.attachments.values()]
+          .some(isAudio);
+
+      if (audio) {
+        await removeMessage(
+          message,
+          "Audio"
+        );
+
+        return;
+      }
+
+      // --------------------------------------------------------
+      // MEDIA
+      // --------------------------------------------------------
+
+      const media =
+        getMedia(message);
+
+      // --------------------------------------------------------
+      // NO PICTURE / VIDEO
+      // --------------------------------------------------------
+
+      if (!media.length) {
+        await removeMessage(
+          message,
+          "Text / emoji / trigger without picture or video"
+        );
+
+        return;
+      }
+
+      // --------------------------------------------------------
+      // PICTURE / VIDEO WITHOUT TRIGGER
+      // --------------------------------------------------------
+
+      if (!hasTrigger(message)) {
+        await removeMessage(
+          message,
+          "Picture / video without trigger"
+        );
+
+        return;
+      }
+
+      // ========================================================
+      // ONLY HERE DOES AI RUN
+      // ========================================================
+
+      console.log(
+        "🤖 Trigger + picture/video detected."
       );
 
-      return;
-    }
+      // --------------------------------------------------------
+      // SAVE SENDER BEFORE DELETE
+      // --------------------------------------------------------
 
-    // ----------------------------------------------------------
-    // STICKERS
-    // ----------------------------------------------------------
+      const sender =
+        message.author;
 
-    if (message.stickers && message.stickers.size > 0) {
-      await deleteMessage(
+      // --------------------------------------------------------
+      // DELETE ORIGINAL IMMEDIATELY
+      // --------------------------------------------------------
+
+      await removeMessage(
         message,
-        "Sticker / server sticker is not allowed"
+        "Submission received — private AI checking"
       );
 
-      return;
-    }
+      // --------------------------------------------------------
+      // PRIVATE STATUS
+      // --------------------------------------------------------
 
-    // ----------------------------------------------------------
-    // AUDIO
-    // ----------------------------------------------------------
-
-    const hasAudio = [...message.attachments.values()].some(
-      isAudioAttachment
-    );
-
-    if (hasAudio) {
-      await deleteMessage(
-        message,
-        "Audio / voice audio is not allowed"
+      await sendPrivateStatus(
+        sender,
+        "🤖 **Your Kain Po Tayo Team Ryzza submission is being checked.**\n\n" +
+        "Your original message has been removed from the channel while the bot checks your picture/video."
       );
 
-      return;
-    }
+      // --------------------------------------------------------
+      // AI CHECK
+      // --------------------------------------------------------
 
-    // ----------------------------------------------------------
-    // MEDIA
-    // ----------------------------------------------------------
+      let approved =
+        null;
 
-    const media = getMediaAttachments(message);
+      for (
+        const attachment of media
+      ) {
+        const result =
+          await checkMedia(
+            attachment
+          );
 
-    // ----------------------------------------------------------
-    // TEXT / EMOJI WITHOUT MEDIA
-    // ----------------------------------------------------------
+        if (result) {
+          approved =
+            attachment;
 
-    if (media.length === 0) {
-      await deleteMessage(
-        message,
-        "Text / emoji without food media"
-      );
+          break;
+        }
+      }
 
-      return;
-    }
-
-    // ----------------------------------------------------------
-    // MEDIA WITHOUT TRIGGER
-    // ----------------------------------------------------------
-
-    if (!hasTrigger(message)) {
-      await deleteMessage(
-        message,
-        "Image / GIF / video without trigger"
-      );
-
-      return;
-    }
-
-    // ----------------------------------------------------------
-    // MEDIA + TRIGGER
-    // ----------------------------------------------------------
-
-    console.log("🍽️ Trigger + media detected.");
-    console.log("🤖 Starting AI food check...");
-
-    let approvedAttachment = null;
-
-    for (const attachment of media) {
-      const approved = await checkMediaWithAI(attachment);
+      // --------------------------------------------------------
+      // APPROVED
+      // --------------------------------------------------------
 
       if (approved) {
-        approvedAttachment = attachment;
-        break;
+        console.log(
+          `✅ FOOD APPROVED for ${sender.tag}`
+        );
+
+        const published =
+          await publishApprovedFood(
+            message,
+            approved
+          );
+
+        if (published) {
+          await sendPrivateStatus(
+            sender,
+            "✅ **Your food submission was approved!**\n\n" +
+            "It has been posted in the food channel and your username was mentioned."
+          );
+        }
+
+        return;
       }
-    }
 
-    // ----------------------------------------------------------
-    // FOOD APPROVED
-    // ----------------------------------------------------------
+      // --------------------------------------------------------
+      // REJECTED
+      // --------------------------------------------------------
 
-    if (approvedAttachment) {
-      console.log("✅ AI APPROVED: FOOD");
-
-      await repostApprovedFood(
-        message,
-        approvedAttachment
+      console.log(
+        `❌ NOT FOOD for ${sender.tag}`
       );
 
-      return;
+      await sendPrivateStatus(
+        sender,
+        "❌ **Your submission was not approved.**\n\n" +
+        "The AI check did not identify food in the picture/video, so it was not posted publicly."
+      );
+    } catch (error) {
+      console.error(
+        "❌ Message handler error:",
+        error
+      );
     }
-
-    // ----------------------------------------------------------
-    // NOT FOOD
-    // ----------------------------------------------------------
-
-    console.log("❌ AI REJECTED: NOT FOOD");
-
-    await deleteMessage(
-      message,
-      "AI determined media is not food"
-    );
-  } catch (error) {
-    console.error(
-      "❌ Message handler error:",
-      error
-    );
   }
-});
+);
 
 // ============================================================
 // LOGIN
@@ -1056,13 +1262,23 @@ client.on("messageCreate", async (message) => {
 
 ensureTempDir()
   .then(async () => {
-    console.log("📁 Temporary directory ready.");
+    console.log(
+      "📁 Temporary directory ready."
+    );
 
-    await client.login(DISCORD_TOKEN);
+    await client.login(
+      DISCORD_TOKEN
+    );
 
-    console.log("🔐 Discord login started.");
+    console.log(
+      "🔐 Discord login started."
+    );
   })
-  .catch((error) => {
-    console.error("❌ Startup error:", error);
+  .catch(error => {
+    console.error(
+      "❌ Startup failed:",
+      error
+    );
+
     process.exit(1);
   });
