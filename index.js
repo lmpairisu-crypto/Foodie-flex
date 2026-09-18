@@ -1,17 +1,10 @@
-
 const express = require("express");
-const {
-  Client,
-  GatewayIntentBits,
-  ChannelType,
-  EmbedBuilder
-} = require("discord.js");
+const { Client, GatewayIntentBits, ChannelType } = require("discord.js");
 const OpenAI = require("openai");
 
 // ======================================================
 // RENDER HEALTH SERVER
 // ======================================================
-const express = require("express");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -25,7 +18,7 @@ app.get("/health", (req, res) => {
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Health server running on port ${PORT}`);
+  console.log(`Health server running on port ${PORT}`);
 });
 
 // ======================================================
