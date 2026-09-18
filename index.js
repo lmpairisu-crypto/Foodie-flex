@@ -11,16 +11,28 @@ const OpenAI = require("openai");
 // ======================================================
 // RENDER HEALTH SERVER
 // ======================================================
+const http = require("http");
 
-const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = Number(process.env.PORT) || 10000;
 
-app.get("/", (req, res) => {
-  res.send("Kain Po Tayo Team Ryzza Bot is online!");
+const server = http.createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, {
+      "Content-Type": "text/plain"
+    });
+
+    return res.end("OK");
+  }
+
+  res.writeHead(200, {
+    "Content-Type": "text/plain"
+  });
+
+  res.end("Kain Po Tayo Team Ryzza Bot is online.");
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Health server running on port ${PORT}`);
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`🌐 Health server running on port ${PORT}`);
 });
 
 // ======================================================
